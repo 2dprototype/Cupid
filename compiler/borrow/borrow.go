@@ -1,0 +1,340 @@
+package borrow
+
+import (
+	"cupid/compiler/ast"
+	"cupid/compiler/diagnostics"
+	"cupid/compiler/modules"
+	"cupid/compiler/lexer"
+	"fmt"
+)
+
+type BorrowKind int
+
+const (
+	BorrowShared BorrowKind = iota
+	BorrowMut
+)
+
+type Borrow struct {
+	Kind       BorrowKind
+	BorrowedBy string
+	Pos        ast.Position
+}
+
+type BorrowChecker struct {
+	modules     map[string]*modules.Module
+	resolutions map[ast.Node]ast.Node
+	exprTypes   map[ast.Expr]ast.Type
+	errors      []error
+}
+
+func NewBorrowChecker(
+	mods map[string]*modules.Module,
+	res map[ast.Node]ast.Node,
+	exprTypes map[ast.Expr]ast.Type,
+) *BorrowChecker {
+	return &BorrowChecker{
+		modules:     mods,
+		resolutions: res,
+		exprTypes:   exprTypes,
+		errors:      []error{},
+	}
+}
+
+func (bc *BorrowChecker) Errors() []error {
+	return bc.errors
+}
+
+func (bc *BorrowChecker) BorrowCheckAll() bool {
+	for _, mod := range bc.modules {
+		bc.borrowCheckModule(mod)
+	}
+	return len(bc.errors) == 0
+}
+
+func (bc *BorrowChecker) borrowCheckModule(mod *modules.Module) {
+	for _, decl := range mod.AST.Decls {
+		if fd, ok := decl.(*ast.FuncDecl); ok {
+			bc.borrowCheckFunc(fd, mod)
+		}
+	}
+}
+
+func (bc *BorrowChecker) isCopyType(t ast.Type) bool {
+	if t == nil {
+		return true // default to copy for safety
+	}
+	switch pt := t.(type) {
+	case *ast.PrimitiveType:
+		switch pt.Name {
+		case "i32", "i64", "u32", "u64", "f32", "f64", "bool", "char", "void":
+			return true
+		default:
+			return false // structs or other custom types are not copy
+		}
+	case *ast.PointerType:
+		return true // references themselves are copy
+	case *ast.ArrayType:
+		return false
+	case *ast.ChannelType:
+		return false
+	}
+	return false
+}
+
+type borrowEnv struct {
+	moved           map[string]bool
+	borrows         map[string][]Borrow
+	declaredInBlock map[int][]string // block nesting level -> declared variables
+	nestingLevel    int
+}
+
+func (bc *BorrowChecker) borrowCheckFunc(fd *ast.FuncDecl, mod *modules.Module) {
+	if fd.Body == nil {
+		return
+	}
+
+	env := &borrowEnv{
+		moved:           make(map[string]bool),
+		borrows:         make(map[string][]Borrow),
+		declaredInBlock: make(map[int][]string),
+		nestingLevel:    0,
+	}
+
+	// Add parameters to declared variables of block level 0
+	for _, p := range fd.Params {
+		env.declaredInBlock[0] = append(env.declaredInBlock[0], p.Name)
+	}
+
+	bc.checkBlockStmt(fd.Body, env, mod)
+}
+
+func (bc *BorrowChecker) checkBlockStmt(bs *ast.BlockStmt, env *borrowEnv, mod *modules.Module) {
+	env.nestingLevel++
+	defer func() {
+		// Clean up variables declared at this block level
+		vars := env.declaredInBlock[env.nestingLevel]
+		for _, v := range vars {
+			// Remove borrows by this variable
+			for bName, bList := range env.borrows {
+				newList := []Borrow{}
+				for _, b := range bList {
+					if b.BorrowedBy != v {
+						newList = append(newList, b)
+					}
+				}
+				if len(newList) == 0 {
+					delete(env.borrows, bName)
+				} else {
+					env.borrows[bName] = newList
+				}
+			}
+			// Remove moved status of local variables
+			delete(env.moved, v)
+		}
+		delete(env.declaredInBlock, env.nestingLevel)
+		env.nestingLevel--
+	}()
+
+	for _, stmt := range bs.Stmts {
+		bc.checkStmt(stmt, env, mod)
+	}
+}
+
+func (bc *BorrowChecker) checkStmt(stmt ast.Stmt, env *borrowEnv, mod *modules.Module) {
+	switch s := stmt.(type) {
+	case *ast.LetStmt:
+		// 1. Check value expression
+		bc.checkExpr(s.Value, env, mod, false)
+
+		// 2. Register variable
+		env.declaredInBlock[env.nestingLevel] = append(env.declaredInBlock[env.nestingLevel], s.Name)
+
+		// 3. Detect if this variable is a borrow creation
+		if ref, ok := s.Value.(*ast.RefExpr); ok {
+			if ident, ok := ref.Target.(*ast.IdentExpr); ok {
+				kind := BorrowShared
+				if ref.Mutable {
+					kind = BorrowMut
+				}
+
+				// Check borrowing rules
+				bc.addBorrow(ident.Name, s.Name, kind, ref.Position, env)
+			}
+		}
+
+	case *ast.ReturnStmt:
+		if s.Value != nil {
+			bc.checkExpr(s.Value, env, mod, true) // return moves value
+		}
+
+	case *ast.ExprStmt:
+		// Check assignments
+		if bin, ok := s.Expression.(*ast.BinaryExpr); ok && bin.Op == lexer.ASSIGN {
+			// Left is assignment target
+			bc.checkExpr(bin.Right, env, mod, true)
+			bc.checkAssignTarget(bin.Left, env, mod)
+		} else {
+			bc.checkExpr(s.Expression, env, mod, false)
+		}
+
+	case *ast.IfStmt:
+		bc.checkExpr(s.Condition, env, mod, false)
+		bc.checkBlockStmt(s.ThenBlock, env, mod)
+		if s.ElseBlock != nil {
+			bc.checkStmt(s.ElseBlock, env, mod)
+		}
+
+	case *ast.ForStmt:
+		if s.VarName != "" {
+			env.declaredInBlock[env.nestingLevel] = append(env.declaredInBlock[env.nestingLevel], s.VarName)
+		}
+		if s.RangeExpr != nil {
+			bc.checkExpr(s.RangeExpr, env, mod, false)
+		}
+		bc.checkBlockStmt(s.Body, env, mod)
+
+	case *ast.UnsafeBlock:
+		bc.checkBlockStmt(s.Block, env, mod)
+	}
+}
+
+func (bc *BorrowChecker) checkExpr(expr ast.Expr, env *borrowEnv, mod *modules.Module, isMoveContext bool) {
+	if expr == nil {
+		return
+	}
+
+	switch e := expr.(type) {
+	case *ast.IdentExpr:
+		// Check use after move
+		if env.moved[e.Name] {
+			bc.reportError(e.Pos(), fmt.Sprintf("use of moved value %q", e.Name), "E202", len(e.Name))
+			return
+		}
+
+		// If this is a move context and the type is not Copy, mark it as moved
+		if isMoveContext {
+			t := bc.exprTypes[e]
+			if !bc.isCopyType(t) {
+				// Verify it has no active borrows
+				if len(env.borrows[e.Name]) > 0 {
+					bc.reportError(e.Pos(), fmt.Sprintf("cannot move %q because it is borrowed", e.Name), "E204", len(e.Name))
+				} else {
+					env.moved[e.Name] = true
+				}
+			}
+		}
+
+	case *ast.BinaryExpr:
+		// Check both operands
+		bc.checkExpr(e.Left, env, mod, isMoveContext)
+		bc.checkExpr(e.Right, env, mod, isMoveContext)
+
+	case *ast.UnaryExpr:
+		bc.checkExpr(e.Right, env, mod, isMoveContext)
+
+	case *ast.RefExpr:
+		// Address-of expression. E.g. &x or &mut x
+		// If target is an identifier, we check borrowing rules in checkStmt for LetStmt.
+		// If it's used inside an expression directly:
+		if ident, ok := e.Target.(*ast.IdentExpr); ok {
+			kind := BorrowShared
+			if e.Mutable {
+				kind = BorrowMut
+			}
+			bc.addBorrow(ident.Name, "", kind, e.Position, env)
+		} else {
+			bc.checkExpr(e.Target, env, mod, false)
+		}
+
+	case *ast.DerefExpr:
+		bc.checkExpr(e.Target, env, mod, false)
+
+	case *ast.SelectorExpr:
+		bc.checkExpr(e.Target, env, mod, false)
+
+	case *ast.CallExpr:
+		// Call expression. If an argument is passed by value (non-pointer), it might be moved!
+		decl := bc.resolutions[e.Function]
+		var fd *ast.FuncDecl
+		if decl != nil {
+			fd, _ = decl.(*ast.FuncDecl)
+		}
+
+		for i, arg := range e.Args {
+			// Check if parameter is a reference or a value
+			isArgMove := false
+			if fd != nil && i < len(fd.Params) {
+				paramType := fd.Params[i].Type
+				if _, ok := paramType.(*ast.PointerType); !ok {
+					// Passed by value!
+					isArgMove = true
+				}
+			}
+			bc.checkExpr(arg, env, mod, isArgMove)
+		}
+
+	case *ast.IndexExpr:
+		bc.checkExpr(e.Target, env, mod, false)
+		bc.checkExpr(e.Index, env, mod, false)
+
+	case *ast.StructInitExpr:
+		for _, f := range e.Fields {
+			bc.checkExpr(f.Value, env, mod, isMoveContext)
+		}
+
+	case *ast.MatchExpr:
+		bc.checkExpr(e.Target, env, mod, false)
+		for _, c := range e.Cases {
+			bc.checkExpr(c.Pattern, env, mod, false)
+			bc.checkBlockStmt(c.Body, env, mod)
+		}
+	}
+}
+
+func (bc *BorrowChecker) checkAssignTarget(target ast.Expr, env *borrowEnv, mod *modules.Module) {
+	if ident, ok := target.(*ast.IdentExpr); ok {
+		// Verify variable is not borrowed
+		if len(env.borrows[ident.Name]) > 0 {
+			bc.reportError(ident.Pos(), fmt.Sprintf("cannot assign to %q because it is borrowed", ident.Name), "E203", len(ident.Name))
+		}
+		// Re-assignment makes a moved variable initialized again!
+		delete(env.moved, ident.Name)
+	} else if selector, ok := target.(*ast.SelectorExpr); ok {
+		bc.checkAssignTarget(selector.Target, env, mod)
+	}
+}
+
+func (bc *BorrowChecker) addBorrow(varName string, borrowedBy string, kind BorrowKind, pos ast.Position, env *borrowEnv) {
+	if env.moved[varName] {
+		bc.reportError(pos, fmt.Sprintf("cannot borrow moved value %q", varName), "E202", len(varName))
+		return
+	}
+
+	activeBorrows := env.borrows[varName]
+	for _, b := range activeBorrows {
+		// Mut borrow conflicts with everything
+		if kind == BorrowMut || b.Kind == BorrowMut {
+			bc.reportError(pos, fmt.Sprintf("cannot borrow %q as mutable because it is already borrowed", varName), "E201", len(varName))
+			return
+		}
+	}
+
+	env.borrows[varName] = append(env.borrows[varName], Borrow{
+		Kind:       kind,
+		BorrowedBy: borrowedBy,
+		Pos:        pos,
+	})
+}
+
+func (bc *BorrowChecker) reportError(pos ast.Position, msg string, code string, spanLen int) {
+	diag := diagnostics.Diagnostic{
+		Code:    code,
+		Message: msg,
+		File:    pos.File,
+		Line:    pos.Line,
+		Column:  pos.Col,
+		SpanLen: spanLen,
+	}
+	bc.errors = append(bc.errors, diag)
+}

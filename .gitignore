@@ -1,0 +1,4 @@
+/fasm
+*.exe
+/examples/*.exe
+plan.md
