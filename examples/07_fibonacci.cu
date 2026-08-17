@@ -27,7 +27,7 @@ fn print_fib_sequence(count: i64) {
 fn main() {
     print_fib_sequence(10)
     
-    println("32th Fibonacci recursively:")
-    let fib10 = fib_recursive(32)
+    println("10th Fibonacci recursively:")
+    let fib10 = fib_recursive(10)
     println(fib10)
 }

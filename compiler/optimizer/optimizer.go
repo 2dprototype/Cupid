@@ -34,20 +34,12 @@ func (opt *Optimizer) optimizeFunction(fn *mir.MIRFunction) {
 }
 
 func (opt *Optimizer) foldConstants(fn *mir.MIRFunction) {
-	constMap := make(map[int]string) // localID -> constant literal
-
 	for _, blk := range fn.Blocks {
-		newStmts := make([]mir.Statement, 0, len(blk.Statements))
 		for _, stmt := range blk.Statements {
 			if assign, ok := stmt.(*mir.AssignStmt); ok {
-				// Check for binary constant folding
 				if bin, ok := assign.Src.(*mir.BinaryRvalue); ok {
-					leftVal := opt.getConstantValue(bin.Left, constMap)
-					rightVal := opt.getConstantValue(bin.Right, constMap)
-
-					if leftVal != "" && rightVal != "" {
-						if folded, ok := opt.evalBinaryConst(bin.Op, leftVal, rightVal); ok {
-							constMap[assign.Dest.ID] = folded
+					if bin.Left.Kind == mir.OpConst && bin.Right.Kind == mir.OpConst {
+						if folded, ok := opt.evalBinaryConst(bin.Op, bin.Left.Constant, bin.Right.Constant); ok {
 							assign.Src = &mir.UseRvalue{
 								Op: mir.Operand{
 									Kind:     mir.OpConst,
@@ -57,26 +49,10 @@ func (opt *Optimizer) foldConstants(fn *mir.MIRFunction) {
 							}
 						}
 					}
-				} else if use, ok := assign.Src.(*mir.UseRvalue); ok {
-					if use.Op.Kind == mir.OpConst {
-						constMap[assign.Dest.ID] = use.Op.Constant
-					}
 				}
 			}
-			newStmts = append(newStmts, stmt)
 		}
-		blk.Statements = newStmts
 	}
-}
-
-func (opt *Optimizer) getConstantValue(op mir.Operand, constMap map[int]string) string {
-	if op.Kind == mir.OpConst {
-		return op.Constant
-	}
-	if val, exists := constMap[op.LocalID]; exists {
-		return val
-	}
-	return ""
 }
 
 func (opt *Optimizer) evalBinaryConst(op string, left string, right string) (string, bool) {
