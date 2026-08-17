@@ -8,5 +8,5 @@ fn main() {
 	// println(x+c)
 	let x = 10
 	x = 5
-	println(x)
+	println(i32(x))
 }

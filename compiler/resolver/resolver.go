@@ -158,22 +158,24 @@ func (r *Resolver) resolveFuncDecl(fd *ast.FuncDecl, mod *modules.Module, parent
 	}
 
 	// Resolve parameter types and add params to scope
-	for _, p := range fd.Params {
+	for i := range fd.Params {
+		p := &fd.Params[i]
 		r.resolveType(p.Type, mod, funcScope)
 		sym := &Symbol{
 			Name:     p.Name,
 			Kind:     SymVar,
-			DeclNode: p.Type, // Type is the definition
+			DeclNode: p,
+			IsMut:    p.Mutable,
 		}
 		if p.Name == "self" {
 			// self is special, check if it's mutable
 			if _, ok := p.Type.(*ast.PointerType); ok {
 				sym.IsMut = true
+				p.Mutable = true
 			}
 		}
 		funcScope.Insert(sym)
-		// Map the parameter usage to itself
-		r.Resolutions[p.Type] = p.Type
+		r.Resolutions[p] = p
 	}
 
 	if fd.ReturnType != nil {

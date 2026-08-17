@@ -238,8 +238,17 @@ func (gp GenericParam) String() string {
 }
 
 type Param struct {
-	Name string
-	Type Type
+	Position Position
+	Name     string
+	Mutable  bool
+	Type     Type
+}
+func (p *Param) Pos() Position { return p.Position }
+func (p *Param) String() string {
+	if p.Mutable {
+		return "mut " + p.Name + ": " + p.Type.String()
+	}
+	return p.Name + ": " + p.Type.String()
 }
 
 type WhereClause struct {

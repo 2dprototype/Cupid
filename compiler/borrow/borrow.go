@@ -183,7 +183,7 @@ func (bc *BorrowChecker) checkStmt(stmt ast.Stmt, env *borrowEnv, mod *modules.M
 
 	case *ast.ExprStmt:
 		// Check assignments
-		if bin, ok := s.Expression.(*ast.BinaryExpr); ok && bin.Op == lexer.ASSIGN {
+		if bin, ok := s.Expression.(*ast.BinaryExpr); ok && isAssignmentOp(bin.Op) {
 			// Left is assignment target
 			bc.checkExpr(bin.Right, env, mod, true)
 			bc.checkAssignTarget(bin.Left, env, mod)
@@ -248,9 +248,15 @@ func (bc *BorrowChecker) checkExpr(expr ast.Expr, env *borrowEnv, mod *modules.M
 
 	case *ast.RefExpr:
 		// Address-of expression. E.g. &x or &mut x
-		// If target is an identifier, we check borrowing rules in checkStmt for LetStmt.
-		// If it's used inside an expression directly:
 		if ident, ok := e.Target.(*ast.IdentExpr); ok {
+			decl := bc.resolutions[ident]
+			if e.Mutable {
+				if letStmt, ok := decl.(*ast.LetStmt); ok && !letStmt.Mutable {
+					bc.reportError(e.Pos(), fmt.Sprintf("cannot borrow immutable variable %q as mutable (declare with 'mut' to make it mutable)", ident.Name), "E201", len(ident.Name))
+				} else if param, ok := decl.(*ast.Param); ok && !param.Mutable {
+					bc.reportError(e.Pos(), fmt.Sprintf("cannot borrow immutable parameter %q as mutable", param.Name), "E201", len(param.Name))
+				}
+			}
 			kind := BorrowShared
 			if e.Mutable {
 				kind = BorrowMut
@@ -307,6 +313,20 @@ func (bc *BorrowChecker) checkExpr(expr ast.Expr, env *borrowEnv, mod *modules.M
 
 func (bc *BorrowChecker) checkAssignTarget(target ast.Expr, env *borrowEnv, mod *modules.Module) {
 	if ident, ok := target.(*ast.IdentExpr); ok {
+		decl := bc.resolutions[ident]
+		if letStmt, ok := decl.(*ast.LetStmt); ok && !letStmt.Mutable {
+			bc.reportError(ident.Pos(), fmt.Sprintf("cannot assign to immutable variable %q (declare with 'mut' to make it mutable)", ident.Name), "E201", len(ident.Name))
+			return
+		}
+		if param, ok := decl.(*ast.Param); ok && !param.Mutable {
+			bc.reportError(ident.Pos(), fmt.Sprintf("cannot assign to immutable parameter %q (declare with 'mut' to make it mutable)", param.Name), "E201", len(param.Name))
+			return
+		}
+		if _, ok := decl.(*ast.GlobalConstDecl); ok {
+			bc.reportError(ident.Pos(), fmt.Sprintf("cannot assign to constant %q", ident.Name), "E201", len(ident.Name))
+			return
+		}
+
 		// Verify variable is not borrowed
 		if len(env.borrows[ident.Name]) > 0 {
 			bc.reportError(ident.Pos(), fmt.Sprintf("cannot assign to %q because it is borrowed", ident.Name), "E203", len(ident.Name))
@@ -315,7 +335,14 @@ func (bc *BorrowChecker) checkAssignTarget(target ast.Expr, env *borrowEnv, mod 
 		delete(env.moved, ident.Name)
 	} else if selector, ok := target.(*ast.SelectorExpr); ok {
 		bc.checkAssignTarget(selector.Target, env, mod)
+	} else if idx, ok := target.(*ast.IndexExpr); ok {
+		bc.checkAssignTarget(idx.Target, env, mod)
 	}
+}
+
+func isAssignmentOp(op lexer.TokenType) bool {
+	return op == lexer.ASSIGN || op == lexer.ADD_ASSIGN || op == lexer.SUB_ASSIGN ||
+		op == lexer.MUL_ASSIGN || op == lexer.DIV_ASSIGN || op == lexer.MOD_ASSIGN
 }
 
 func (bc *BorrowChecker) addBorrow(varName string, borrowedBy string, kind BorrowKind, pos ast.Position, env *borrowEnv) {

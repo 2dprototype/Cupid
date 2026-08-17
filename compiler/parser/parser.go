@@ -271,7 +271,7 @@ func (p *Parser) parseFuncDecl(exported bool) *ast.FuncDecl {
 		} else {
 			return nil
 		}
-		params = append(params, ast.Param{Name: pname, Type: ptype})
+		params = append(params, ast.Param{Name: pname, Mutable: isMut, Type: ptype})
 
 		if p.peekTokenIs(lexer.COMMA) {
 			p.nextToken()

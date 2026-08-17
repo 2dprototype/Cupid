@@ -39,6 +39,21 @@ func isIntType(name string) bool {
 	return false
 }
 
+func canonicalTypeName(name string) string {
+	switch name {
+	case "int":
+		return "i64"
+	case "uint":
+		return "u64"
+	case "usize":
+		return "u64"
+	case "isize":
+		return "i64"
+	default:
+		return name
+	}
+}
+
 func (tc *TypeChecker) TypesEqual(t1, t2 ast.Type) bool {
 	if t1 == nil || t2 == nil {
 		return t1 == t2
@@ -50,19 +65,19 @@ func (tc *TypeChecker) TypesEqual(t1, t2 ast.Type) bool {
 		if !ok {
 			return false
 		}
-		if pt1.Name == pt2.Name {
-			return true
-		}
-		if isIntType(pt1.Name) && isIntType(pt2.Name) {
-			return true
-		}
-		return false
+		return canonicalTypeName(pt1.Name) == canonicalTypeName(pt2.Name)
 	case *ast.PointerType:
 		pt2, ok := t2.(*ast.PointerType)
 		return ok && pt1.Mutable == pt2.Mutable && tc.TypesEqual(pt1.To, pt2.To)
 	case *ast.ArrayType:
 		pt2, ok := t2.(*ast.ArrayType)
-		return ok && pt1.Size == pt2.Size && tc.TypesEqual(pt1.Element, pt2.Element)
+		if !ok {
+			return false
+		}
+		if pt1.Size == -1 || pt2.Size == -1 {
+			return tc.TypesEqual(pt1.Element, pt2.Element)
+		}
+		return pt1.Size == pt2.Size && tc.TypesEqual(pt1.Element, pt2.Element)
 	case *ast.DynTraitType:
 		pt2, ok := t2.(*ast.DynTraitType)
 		return ok && pt1.Trait == pt2.Trait
@@ -161,6 +176,13 @@ func (tc *TypeChecker) typeCheckStmt(stmt ast.Stmt, expectedRet ast.Type, mod *m
 		}
 		valType := tc.TypeCheckExpr(s.Value, mod)
 		if expectedType != nil && valType != nil {
+			if arrType, ok := expectedType.(*ast.ArrayType); ok {
+				if arrLit, ok := s.Value.(*ast.ArrayLiteralExpr); ok {
+					if arrType.Size != -1 && len(arrLit.Elements) != arrType.Size {
+						tc.reportError(s.Value.Pos(), fmt.Sprintf("array size mismatch in variable %q: expected [%d]%s, got [%d]%s", s.Name, arrType.Size, arrType.Element.String(), len(arrLit.Elements), arrType.Element.String()), "E401", len(s.Name))
+					}
+				}
+			}
 			if !tc.TypesEqual(expectedType, valType) {
 				tc.reportError(s.Pos(), fmt.Sprintf("type mismatch in variable binding %q: expected %q, got %q", s.Name, expectedType.String(), valType.String()), "E401", len(s.Name))
 			}
@@ -187,7 +209,7 @@ func (tc *TypeChecker) typeCheckStmt(stmt ast.Stmt, expectedRet ast.Type, mod *m
 	case *ast.ForStmt:
 		if s.RangeExpr != nil {
 			rangeType := tc.TypeCheckExpr(s.RangeExpr, mod)
-			_ = rangeType // range validation (e.g. arrays or iterators)
+			_ = rangeType // range validation
 		}
 		tc.typeCheckBlockStmt(s.Body, expectedRet, mod)
 	case *ast.UnsafeBlock:
@@ -312,6 +334,8 @@ func (tc *TypeChecker) typeCheckIdentExpr(ie *ast.IdentExpr, mod *modules.Module
 		}
 		// Infer type from value
 		return tc.TypeCheckExpr(d.Value, mod)
+	case *ast.Param:
+		return d.Type
 	case ast.Type:
 		// Resolved to a type parameter or type definition
 		return d
