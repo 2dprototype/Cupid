@@ -1123,6 +1123,8 @@ func (p *Parser) parsePrefixFn(t lexer.TokenType) prefixParseFn {
 		return p.parseGroupedExpr
 	case lexer.MATCH:
 		return p.parseMatchExpr
+	case lexer.LBRACKET:
+		return p.parseArrayLiteralExpr
 	default:
 		return nil
 	}
@@ -1305,6 +1307,35 @@ func (p *Parser) parseMatchExpr() ast.Expr {
 	return &ast.MatchExpr{Position: pos, Target: target, Cases: cases}
 }
 
+func (p *Parser) parseArrayLiteralExpr() ast.Expr {
+	pos := ast.Position{File: p.curToken.File, Line: p.curToken.Line, Col: p.curToken.Col}
+	// curToken is '['
+	elements := []ast.Expr{}
+
+	if p.peekTokenIs(lexer.RBRACKET) {
+		p.nextToken() // consume ']'
+		return &ast.ArrayLiteralExpr{Position: pos, Elements: elements}
+	}
+
+	p.nextToken()
+	elements = append(elements, p.parseExpr(LOWEST))
+
+	for p.peekTokenIs(lexer.COMMA) {
+		p.nextToken() // consume ','
+		if p.peekTokenIs(lexer.RBRACKET) {
+			break
+		}
+		p.nextToken()
+		elements = append(elements, p.parseExpr(LOWEST))
+	}
+
+	if !p.expectPeek(lexer.RBRACKET) {
+		return nil
+	}
+
+	return &ast.ArrayLiteralExpr{Position: pos, Elements: elements}
+}
+
 func (p *Parser) isGenericSpecifier() bool {
 	if p.peekToken.Type != lexer.LT {
 		return false
@@ -1367,10 +1398,10 @@ func (p *Parser) parseGenericCallOrInit(left ast.Expr) ast.Expr {
 	}
 	
 	if p.peekTokenIs(lexer.LBRACE) {
+		p.nextToken() // consume name/GT
 		p.nextToken() // consume '{'
 		fields := []ast.StructInitField{}
 		for !p.curTokenIs(lexer.RBRACE) && !p.curTokenIs(lexer.EOF) {
-			p.nextToken()
 			if !p.curTokenIs(lexer.IDENT) {
 				break
 			}

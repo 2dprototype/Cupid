@@ -206,7 +206,7 @@ func (b *Backend) generateFunction(fn *mir.MIRFunction, out *bytes.Buffer) {
 	paramRegs := []string{"rcx", "rdx", "r8", "r9"}
 	for i, param := range fn.Params {
 		offset := offsets[param.ID]
-		if param.Type != nil && param.Type.Kind == hir.TypeStruct && param.Type.ByteSize() > 8 {
+		if param.Type != nil && (param.Type.Kind == hir.TypeStruct || param.Type.Kind == hir.TypeArray) && param.Type.ByteSize() > 8 {
 			if i < len(paramRegs) {
 				reg := paramRegs[i]
 				numWords := (param.Type.ByteSize() + 7) / 8
@@ -248,7 +248,7 @@ func (b *Backend) calculateLocalOffsets(fn *mir.MIRFunction) (map[int]int, int) 
 	currentOffset := 0
 	for _, l := range fn.Locals {
 		sz := 8
-		if l.Type != nil && l.Type.Kind == hir.TypeStruct {
+		if l.Type != nil && (l.Type.Kind == hir.TypeStruct || l.Type.Kind == hir.TypeArray) {
 			sz = l.Type.ByteSize()
 			if sz < 8 {
 				sz = 8
@@ -269,7 +269,7 @@ func (b *Backend) generateStatement(stmt mir.Statement, fn *mir.MIRFunction, off
 		destOffset := offsets[s.Dest.ID]
 		switch src := s.Src.(type) {
 		case *mir.UseRvalue:
-			if s.Dest.Type != nil && s.Dest.Type.Kind == hir.TypeStruct && s.Dest.Type.ByteSize() > 8 && src.Op.Kind == mir.OpLocal {
+			if s.Dest.Type != nil && (s.Dest.Type.Kind == hir.TypeStruct || s.Dest.Type.Kind == hir.TypeArray) && s.Dest.Type.ByteSize() > 8 && src.Op.Kind == mir.OpLocal {
 				srcOffset := offsets[src.Op.LocalID]
 				numWords := (s.Dest.Type.ByteSize() + 7) / 8
 				for w := 0; w < numWords; w++ {
@@ -295,6 +295,17 @@ func (b *Backend) generateStatement(stmt mir.Statement, fn *mir.MIRFunction, off
 				out.WriteString(fmt.Sprintf("    mov rcx, [rax + %d]\n", src.Offset))
 			}
 			out.WriteString(fmt.Sprintf("    mov [rbp - %d], rcx\n", destOffset))
+		case *mir.IndexRvalue:
+			b.loadOperandToReg(src.Index, "rcx", offsets, out)
+			out.WriteString("    shl rcx, 3\n")
+			if src.Base.Kind == mir.OpLocal {
+				baseOffset := offsets[src.Base.LocalID]
+				out.WriteString(fmt.Sprintf("    mov rax, rbp\n"))
+				out.WriteString(fmt.Sprintf("    sub rax, %d\n", baseOffset))
+				out.WriteString("    add rax, rcx\n")
+				out.WriteString("    mov rdx, [rax]\n")
+				out.WriteString(fmt.Sprintf("    mov [rbp - %d], rdx\n", destOffset))
+			}
 		case *mir.RefRvalue:
 			if src.Target.Kind == mir.OpLocal {
 				targetOffset := offsets[src.Target.LocalID]
@@ -320,6 +331,17 @@ func (b *Backend) generateStatement(stmt mir.Statement, fn *mir.MIRFunction, off
 		} else {
 			b.loadOperandToReg(s.Base, "rax", offsets, out)
 			out.WriteString(fmt.Sprintf("    mov [rax + %d], rcx\n", s.Offset))
+		}
+	case *mir.SetIndexStmt:
+		b.loadOperandToReg(s.Val, "rdx", offsets, out)
+		b.loadOperandToReg(s.Index, "rcx", offsets, out)
+		out.WriteString("    shl rcx, 3\n")
+		if s.Base.Kind == mir.OpLocal {
+			baseOffset := offsets[s.Base.LocalID]
+			out.WriteString(fmt.Sprintf("    mov rax, rbp\n"))
+			out.WriteString(fmt.Sprintf("    sub rax, %d\n", baseOffset))
+			out.WriteString("    add rax, rcx\n")
+			out.WriteString("    mov [rax], rdx\n")
 		}
 	case *mir.AsmStmt:
 		out.WriteString(fmt.Sprintf("    %s\n", s.Assembly))
@@ -396,7 +418,15 @@ func (b *Backend) generateUnary(un *mir.UnaryRvalue, destOffset int, offsets map
 }
 
 func (b *Backend) generateCall(call *mir.CallRvalue, destOffset int, offsets map[int]int, out *bytes.Buffer) {
-	// Handle built-ins: print, println
+	// Handle built-ins: print, println, len
+	if call.FuncName == "len" {
+		if len(call.Args) > 0 && call.Args[0].Type != nil && call.Args[0].Type.Kind == hir.TypeArray {
+			out.WriteString(fmt.Sprintf("    mov rax, %d\n", call.Args[0].Type.Size))
+			out.WriteString(fmt.Sprintf("    mov [rbp - %d], rax\n", destOffset))
+			return
+		}
+	}
+
 	if call.FuncName == "print" || call.FuncName == "println" {
 		if len(call.Args) > 0 {
 			arg := call.Args[0]
@@ -421,7 +451,7 @@ func (b *Backend) generateCall(call *mir.CallRvalue, destOffset int, offsets map
 	paramRegs := []string{"rcx", "rdx", "r8", "r9"}
 	for i, arg := range call.Args {
 		if i < len(paramRegs) {
-			if arg.Type != nil && arg.Type.Kind == hir.TypeStruct && arg.Type.ByteSize() > 8 && arg.Kind == mir.OpLocal {
+			if arg.Type != nil && (arg.Type.Kind == hir.TypeStruct || arg.Type.Kind == hir.TypeArray) && arg.Type.ByteSize() > 8 && arg.Kind == mir.OpLocal {
 				argOffset := offsets[arg.LocalID]
 				out.WriteString(fmt.Sprintf("    lea %s, [rbp - %d]\n", paramRegs[i], argOffset))
 			} else {
@@ -436,7 +466,7 @@ func (b *Backend) generateCall(call *mir.CallRvalue, destOffset int, offsets map
 
 	targetName := b.functionLabel(call.FuncName)
 	out.WriteString(fmt.Sprintf("    call %s\n", targetName))
-	if call.Type != nil && call.Type.Kind == hir.TypeStruct && call.Type.ByteSize() > 8 {
+	if call.Type != nil && (call.Type.Kind == hir.TypeStruct || call.Type.Kind == hir.TypeArray) && call.Type.ByteSize() > 8 {
 		numWords := (call.Type.ByteSize() + 7) / 8
 		for w := 0; w < numWords; w++ {
 			out.WriteString(fmt.Sprintf("    mov rcx, [rax + %d]\n", w*8))
@@ -452,7 +482,7 @@ func (b *Backend) generateTerminator(term mir.Terminator, fn *mir.MIRFunction, o
 	switch t := term.(type) {
 	case *mir.ReturnTerminator:
 		if t.Value != nil {
-			if fn.ReturnType != nil && fn.ReturnType.Kind == hir.TypeStruct && fn.ReturnType.ByteSize() > 8 && t.Value.Kind == mir.OpLocal {
+			if fn.ReturnType != nil && (fn.ReturnType.Kind == hir.TypeStruct || fn.ReturnType.Kind == hir.TypeArray) && fn.ReturnType.ByteSize() > 8 && t.Value.Kind == mir.OpLocal {
 				valOffset := offsets[t.Value.LocalID]
 				out.WriteString(fmt.Sprintf("    lea rax, [rbp - %d]\n", valOffset))
 			} else {

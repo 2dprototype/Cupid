@@ -227,6 +227,18 @@ type HIRAsmStmt struct {
 
 func (s *HIRAsmStmt) hirStmt() {}
 
+type HIRMatchCase struct {
+	Pattern HIRExpr
+	Body    *HIRBlock
+}
+
+type HIRMatchStmt struct {
+	Target HIRExpr
+	Cases  []HIRMatchCase
+}
+
+func (s *HIRMatchStmt) hirStmt() {}
+
 // HIR Expressions
 type HIRExpr interface {
 	hirExpr()
@@ -320,6 +332,14 @@ type HIRIndexExpr struct {
 
 func (e *HIRIndexExpr) hirExpr()        {}
 func (e *HIRIndexExpr) Type() *HIRType { return e.Typ }
+
+type HIRArrayInitExpr struct {
+	Elements []HIRExpr
+	Typ      *HIRType
+}
+
+func (e *HIRArrayInitExpr) hirExpr()        {}
+func (e *HIRArrayInitExpr) Type() *HIRType { return e.Typ }
 
 // Lowering AST to HIR
 type Lowerer struct {
@@ -523,6 +543,9 @@ func (l *Lowerer) lowerStmt(stmt ast.Stmt, mod *modules.Module) HIRStmt {
 				Value:  rhs,
 			}
 		}
+		if me, ok := s.Expression.(*ast.MatchExpr); ok {
+			return l.lowerStmt(me, mod)
+		}
 		return &HIRExprStmt{Expr: l.lowerExpr(s.Expression, mod)}
 	case *ast.IfStmt:
 		cond := l.lowerExpr(s.Condition, mod)
@@ -556,6 +579,26 @@ func (l *Lowerer) lowerStmt(stmt ast.Stmt, mod *modules.Module) HIRStmt {
 		return l.lowerBlock(s.Block, mod)
 	case *ast.AsmBlock:
 		return &HIRAsmStmt{Assembly: s.RawText}
+	case *ast.MatchExpr:
+		target := l.lowerExpr(s.Target, mod)
+		cases := make([]HIRMatchCase, 0, len(s.Cases))
+		for _, c := range s.Cases {
+			var pat HIRExpr
+			if ident, ok := c.Pattern.(*ast.IdentExpr); ok && ident.Name == "_" {
+				pat = nil
+			} else {
+				pat = l.lowerExpr(c.Pattern, mod)
+			}
+			body := l.lowerBlock(c.Body, mod)
+			cases = append(cases, HIRMatchCase{
+				Pattern: pat,
+				Body:    body,
+			})
+		}
+		return &HIRMatchStmt{
+			Target: target,
+			Cases:  cases,
+		}
 	}
 	return nil
 }
@@ -725,6 +768,15 @@ func (l *Lowerer) lowerExpr(expr ast.Expr, mod *modules.Module) HIRExpr {
 			Target: target,
 			Index:  idx,
 			Typ:    elemType,
+		}
+	case *ast.ArrayLiteralExpr:
+		elements := make([]HIRExpr, 0, len(e.Elements))
+		for _, elem := range e.Elements {
+			elements = append(elements, l.lowerExpr(elem, mod))
+		}
+		return &HIRArrayInitExpr{
+			Elements: elements,
+			Typ:      hirType,
 		}
 	}
 

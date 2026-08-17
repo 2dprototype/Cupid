@@ -752,8 +752,24 @@ func (me *MatchExpr) String() string {
 	return sb.String()
 }
 func (me *MatchExpr) exprNode() {}
+func (me *MatchExpr) stmtNode() {}
 
 type MatchCase struct {
 	Pattern Expr
 	Body    *BlockStmt
 }
+
+type ArrayLiteralExpr struct {
+	Position Position
+	Elements []Expr
+}
+
+func (ale *ArrayLiteralExpr) Pos() Position { return ale.Position }
+func (ale *ArrayLiteralExpr) String() string {
+	var parts []string
+	for _, e := range ale.Elements {
+		parts = append(parts, e.String())
+	}
+	return "[" + strings.Join(parts, ", ") + "]"
+}
+func (ale *ArrayLiteralExpr) exprNode() {}

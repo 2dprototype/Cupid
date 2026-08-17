@@ -3,6 +3,7 @@ package mir
 import (
 	"cupid/compiler/hir"
 	"fmt"
+	"strconv"
 )
 
 type OperandKind int
@@ -160,6 +161,28 @@ type AsmStmt struct {
 func (s *AsmStmt) statement() {}
 func (s *AsmStmt) String() string {
 	return fmt.Sprintf("  asm: %s", s.Assembly)
+}
+
+type IndexRvalue struct {
+	Base  Operand
+	Index Operand
+	Type  *hir.HIRType
+}
+
+func (r *IndexRvalue) rvalue() {}
+func (r *IndexRvalue) String() string {
+	return fmt.Sprintf("%s[%s]", r.Base.String(), r.Index.String())
+}
+
+type SetIndexStmt struct {
+	Base  Operand
+	Index Operand
+	Val   Operand
+}
+
+func (s *SetIndexStmt) statement() {}
+func (s *SetIndexStmt) String() string {
+	return fmt.Sprintf("  set_index %s[%s] = %s", s.Base.String(), s.Index.String(), s.Val.String())
 }
 
 type Terminator interface {
@@ -362,6 +385,14 @@ func (l *MIRLowerer) lowerStmt(stmt hir.HIRStmt, ctx *fnContext) {
 				Offset: fa.Offset,
 				Val:    valOp,
 			})
+		} else if idx, ok := s.Target.(*hir.HIRIndexExpr); ok {
+			baseOp := l.lowerExpr(idx.Target, ctx)
+			idxOp := l.lowerExpr(idx.Index, ctx)
+			ctx.currBlock.Statements = append(ctx.currBlock.Statements, &SetIndexStmt{
+				Base:  baseOp,
+				Index: idxOp,
+				Val:   valOp,
+			})
 		}
 	case *hir.HIRReturnStmt:
 		var retOp *Operand
@@ -443,6 +474,49 @@ func (l *MIRLowerer) lowerStmt(stmt hir.HIRStmt, ctx *fnContext) {
 		ctx.currBlock.Statements = append(ctx.currBlock.Statements, &AsmStmt{
 			Assembly: s.Assembly,
 		})
+	case *hir.HIRMatchStmt:
+		targetOp := l.lowerExpr(s.Target, ctx)
+		mergeBlk := ctx.mirFn.NewBlock()
+
+		for _, c := range s.Cases {
+			caseBodyBlk := ctx.mirFn.NewBlock()
+			nextCaseBlk := ctx.mirFn.NewBlock()
+
+			if c.Pattern == nil {
+				// Wildcard default case '_'
+				ctx.currBlock.Terminator = &BranchTerminator{TargetBlock: caseBodyBlk.ID}
+			} else {
+				patOp := l.lowerExpr(c.Pattern, ctx)
+				condLoc := ctx.mirFn.NewLocal(&hir.HIRType{Kind: hir.TypeBool, Name: "bool"}, "tmp_match_cond")
+				ctx.currBlock.Statements = append(ctx.currBlock.Statements, &AssignStmt{
+					Dest: condLoc,
+					Src: &BinaryRvalue{
+						Op:    "==",
+						Left:  targetOp,
+						Right: patOp,
+						Type:  &hir.HIRType{Kind: hir.TypeBool, Name: "bool"},
+					},
+				})
+				ctx.currBlock.Terminator = &CondBranchTerminator{
+					Cond:      Operand{Kind: OpLocal, LocalID: condLoc.ID, Type: condLoc.Type},
+					ThenBlock: caseBodyBlk.ID,
+					ElseBlock: nextCaseBlk.ID,
+				}
+			}
+
+			ctx.currBlock = caseBodyBlk
+			l.lowerBlock(c.Body, ctx)
+			if ctx.currBlock != nil && ctx.currBlock.Terminator == nil {
+				ctx.currBlock.Terminator = &BranchTerminator{TargetBlock: mergeBlk.ID}
+			}
+
+			ctx.currBlock = nextCaseBlk
+		}
+
+		if ctx.currBlock != nil && ctx.currBlock.Terminator == nil {
+			ctx.currBlock.Terminator = &BranchTerminator{TargetBlock: mergeBlk.ID}
+		}
+		ctx.currBlock = mergeBlk
 	}
 }
 
@@ -562,6 +636,30 @@ func (l *MIRLowerer) lowerExpr(expr hir.HIRExpr, ctx *fnContext) Operand {
 				Type:   e.Typ,
 			},
 		})
+		return Operand{Kind: OpLocal, LocalID: destLoc.ID, Type: destLoc.Type}
+	case *hir.HIRIndexExpr:
+		baseOp := l.lowerExpr(e.Target, ctx)
+		idxOp := l.lowerExpr(e.Index, ctx)
+		destLoc := ctx.mirFn.NewLocal(e.Typ, "tmp_index")
+		ctx.currBlock.Statements = append(ctx.currBlock.Statements, &AssignStmt{
+			Dest: destLoc,
+			Src: &IndexRvalue{
+				Base:  baseOp,
+				Index: idxOp,
+				Type:  e.Typ,
+			},
+		})
+		return Operand{Kind: OpLocal, LocalID: destLoc.ID, Type: destLoc.Type}
+	case *hir.HIRArrayInitExpr:
+		destLoc := ctx.mirFn.NewLocal(e.Typ, "tmp_array")
+		for i, elem := range e.Elements {
+			elemOp := l.lowerExpr(elem, ctx)
+			ctx.currBlock.Statements = append(ctx.currBlock.Statements, &SetIndexStmt{
+				Base:  Operand{Kind: OpLocal, LocalID: destLoc.ID, Type: destLoc.Type},
+				Index: Operand{Kind: OpConst, Constant: strconv.Itoa(i), Type: &hir.HIRType{Kind: hir.TypeI64, Name: "i64"}},
+				Val:   elemOp,
+			})
+		}
 		return Operand{Kind: OpLocal, LocalID: destLoc.ID, Type: destLoc.Type}
 	}
 

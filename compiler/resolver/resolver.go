@@ -340,9 +340,9 @@ func (r *Resolver) resolveExpr(expr ast.Expr, mod *modules.Module, scope *Scope)
 		r.resolveExpr(e.Target, mod, scope)
 		for _, c := range e.Cases {
 			caseScope := NewScope(scope)
-			// Patterns might introduce variables, but currently Cupid patterns are just constants
-			// If patterns have variables in future, we would bind them here.
-			r.resolveExpr(c.Pattern, mod, caseScope)
+			if ident, ok := c.Pattern.(*ast.IdentExpr); !ok || ident.Name != "_" {
+				r.resolveExpr(c.Pattern, mod, caseScope)
+			}
 			r.resolveBlockStmt(c.Body, mod, caseScope)
 		}
 	case *ast.QuestionExpr:
@@ -353,7 +353,7 @@ func (r *Resolver) resolveExpr(expr ast.Expr, mod *modules.Module, scope *Scope)
 func (r *Resolver) resolveIdentExpr(ie *ast.IdentExpr, mod *modules.Module, scope *Scope) {
 	// 0. Built-in functions and literals
 	switch ie.Name {
-	case "print", "println", "len", "sizeof", "alignof", "true", "false":
+	case "print", "println", "len", "sizeof", "alignof", "true", "false", "_":
 		return
 	}
 

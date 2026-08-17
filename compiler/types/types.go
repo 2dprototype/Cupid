@@ -237,8 +237,8 @@ func (tc *TypeChecker) TypeCheckExpr(expr ast.Expr, mod *modules.Module) ast.Typ
 	case *ast.IndexExpr:
 		targetType := tc.TypeCheckExpr(e.Target, mod)
 		indexType := tc.TypeCheckExpr(e.Index, mod)
-		if indexType != nil && indexType.String() != "i32" {
-			tc.reportError(e.Index.Pos(), fmt.Sprintf("array index must be i32, got %q", indexType.String()), "E404", len(e.Index.String()))
+		if indexType != nil && indexType.String() != "i32" && indexType.String() != "i64" && indexType.String() != "usize" && indexType.String() != "int" {
+			tc.reportError(e.Index.Pos(), fmt.Sprintf("array index must be integer, got %q", indexType.String()), "E404", len(e.Index.String()))
 		}
 		if targetType != nil {
 			if arr, ok := targetType.(*ast.ArrayType); ok {
@@ -247,14 +247,32 @@ func (tc *TypeChecker) TypeCheckExpr(expr ast.Expr, mod *modules.Module) ast.Typ
 				tc.reportError(e.Pos(), fmt.Sprintf("cannot index non-array type %q", targetType.String()), "E405", len(e.Target.String()))
 			}
 		}
+	case *ast.ArrayLiteralExpr:
+		var elemType ast.Type
+		for _, elem := range e.Elements {
+			et := tc.TypeCheckExpr(elem, mod)
+			if elemType == nil {
+				elemType = et
+			} else if et != nil && !tc.TypesEqual(elemType, et) {
+				tc.reportError(elem.Pos(), fmt.Sprintf("array element type mismatch: expected %q, got %q", elemType.String(), et.String()), "E401", len(elem.String()))
+			}
+		}
+		if elemType == nil {
+			elemType = &ast.PrimitiveType{Position: e.Position, Name: "i64"}
+		}
+		t = &ast.ArrayType{Position: e.Position, Element: elemType, Size: len(e.Elements)}
 	case *ast.StructInitExpr:
 		t = tc.typeCheckStructInitExpr(e, mod)
 	case *ast.MatchExpr:
 		targetType := tc.TypeCheckExpr(e.Target, mod)
 		for _, c := range e.Cases {
-			patType := tc.TypeCheckExpr(c.Pattern, mod)
-			if targetType != nil && patType != nil && !tc.TypesEqual(targetType, patType) {
-				tc.reportError(c.Pattern.Pos(), fmt.Sprintf("match pattern type mismatch: expected %q, got %q", targetType.String(), patType.String()), "E401", len(c.Pattern.String()))
+			if ident, ok := c.Pattern.(*ast.IdentExpr); ok && ident.Name == "_" {
+				// Wildcard matches all target types
+			} else {
+				patType := tc.TypeCheckExpr(c.Pattern, mod)
+				if targetType != nil && patType != nil && !tc.TypesEqual(targetType, patType) {
+					tc.reportError(c.Pattern.Pos(), fmt.Sprintf("match pattern type mismatch: expected %q, got %q", targetType.String(), patType.String()), "E401", len(c.Pattern.String()))
+				}
 			}
 			tc.typeCheckBlockStmt(c.Body, &ast.PrimitiveType{Name: "void"}, mod)
 		}
@@ -273,6 +291,9 @@ func (tc *TypeChecker) TypeCheckExpr(expr ast.Expr, mod *modules.Module) ast.Typ
 func (tc *TypeChecker) typeCheckIdentExpr(ie *ast.IdentExpr, mod *modules.Module) ast.Type {
 	if ie.Name == "true" || ie.Name == "false" {
 		return &ast.PrimitiveType{Position: ie.Position, Name: "bool"}
+	}
+	if ie.Name == "_" {
+		return &ast.PrimitiveType{Position: ie.Position, Name: "void"}
 	}
 	if ie.Name == "print" || ie.Name == "println" || ie.Name == "len" || ie.Name == "sizeof" || ie.Name == "alignof" {
 		return &ast.PrimitiveType{Position: ie.Position, Name: "fn"}

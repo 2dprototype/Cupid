@@ -1,9 +1,12 @@
-import { PI } from "math"
 
 fn main() {
-	mut x:i32 = 10
-	// x = x + 10
-	x += 10
+	// let c = 20
+	// mut x:i32 = 10
+	// // x = x + 10
+	// x += 10
+	// println(x)
+	// println(x+c)
+	let x = 10
+	x = 5
 	println(x)
-	println(PI)
 }
