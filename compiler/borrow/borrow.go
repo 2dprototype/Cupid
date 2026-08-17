@@ -67,15 +67,28 @@ func (bc *BorrowChecker) isCopyType(t ast.Type) bool {
 	switch pt := t.(type) {
 	case *ast.PrimitiveType:
 		switch pt.Name {
-		case "i32", "i64", "u32", "u64", "f32", "f64", "bool", "char", "void":
+		case "i32", "i64", "u32", "u64", "f32", "f64", "bool", "char", "void", "string", "int", "uint", "usize", "isize":
 			return true
 		default:
-			return false // structs or other custom types are not copy
+			// Check if struct fields are all copy
+			for _, mod := range bc.modules {
+				for _, decl := range mod.AST.Decls {
+					if sd, ok := decl.(*ast.StructDecl); ok && sd.Name == pt.Name {
+						for _, f := range sd.Fields {
+							if !bc.isCopyType(f.Type) {
+								return false
+							}
+						}
+						return true
+					}
+				}
+			}
+			return true
 		}
 	case *ast.PointerType:
 		return true // references themselves are copy
 	case *ast.ArrayType:
-		return false
+		return bc.isCopyType(pt.Element)
 	case *ast.ChannelType:
 		return false
 	}

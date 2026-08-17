@@ -1,5 +1,7 @@
 
 fn main() {
-	let x = 10.1
-	println(x*2.1)
+	mut x:i32 = 10
+	// x = x + 10
+	x += 10
+	println(x)
 }

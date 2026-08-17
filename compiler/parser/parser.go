@@ -246,13 +246,21 @@ func (p *Parser) parseFuncDecl(exported bool) *ast.FuncDecl {
 		p.nextToken()
 		var pname string
 		var ptype ast.Type
-		if p.curTokenIs(lexer.MUT) && p.peekTokenIs(lexer.IDENT) && p.peekToken.Literal == "self" {
+		isMut := false
+		if p.curTokenIs(lexer.MUT) {
+			isMut = true
+			if !p.expectPeek(lexer.IDENT) {
+				return nil
+			}
+		}
+
+		if p.curTokenIs(lexer.IDENT) && p.curToken.Literal == "self" {
 			pname = "self"
-			p.nextToken() // consume 'self'
-			ptype = &ast.PointerType{Position: pos, To: &ast.PrimitiveType{Position: pos, Name: "self"}, Mutable: true}
-		} else if p.curTokenIs(lexer.IDENT) && p.curToken.Literal == "self" {
-			pname = "self"
-			ptype = &ast.PrimitiveType{Position: pos, Name: "self"}
+			if isMut {
+				ptype = &ast.PointerType{Position: pos, To: &ast.PrimitiveType{Position: pos, Name: "self"}, Mutable: true}
+			} else {
+				ptype = &ast.PrimitiveType{Position: pos, Name: "self"}
+			}
 		} else if p.curTokenIs(lexer.IDENT) {
 			pname = p.curToken.Literal
 			if !p.expectPeek(lexer.COLON) {
