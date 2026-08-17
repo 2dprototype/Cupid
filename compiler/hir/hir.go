@@ -608,20 +608,36 @@ func (l *Lowerer) lowerExpr(expr ast.Expr, mod *modules.Module) HIRExpr {
 		funcName := ""
 		args := make([]HIRExpr, 0, len(e.Args))
 		if sel, ok := e.Function.(*ast.SelectorExpr); ok {
-			target := l.lowerExpr(sel.Target, mod)
-			targetType := target.Type()
-			typeName := ""
-			if targetType != nil {
-				if targetType.Kind == TypePointer {
-					typeName = targetType.ElemType.Name
+			if decl, ok := l.resolver.Resolutions[sel]; ok {
+				if fd, isFunc := decl.(*ast.FuncDecl); isFunc {
+					funcName = fd.Name
 				} else {
-					typeName = targetType.Name
+					funcName = sel.Field
 				}
+			} else {
+				target := l.lowerExpr(sel.Target, mod)
+				targetType := target.Type()
+				typeName := ""
+				if targetType != nil {
+					if targetType.Kind == TypePointer {
+						typeName = targetType.ElemType.Name
+					} else {
+						typeName = targetType.Name
+					}
+				}
+				funcName = typeName + "_" + sel.Field
+				args = append(args, target)
 			}
-			funcName = typeName + "_" + sel.Field
-			args = append(args, target)
 		} else if ident, ok := e.Function.(*ast.IdentExpr); ok {
-			funcName = ident.Name
+			if decl, ok := l.resolver.Resolutions[ident]; ok {
+				if fd, isFunc := decl.(*ast.FuncDecl); isFunc {
+					funcName = fd.Name
+				} else {
+					funcName = ident.Name
+				}
+			} else {
+				funcName = ident.Name
+			}
 		} else {
 			funcName = e.Function.String()
 		}
@@ -645,6 +661,11 @@ func (l *Lowerer) lowerExpr(expr ast.Expr, mod *modules.Module) HIRExpr {
 			Fields:     fields,
 		}
 	case *ast.SelectorExpr:
+		if decl, ok := l.resolver.Resolutions[e]; ok {
+			if gc, isConst := decl.(*ast.GlobalConstDecl); isConst {
+				return l.lowerExpr(gc.Value, mod)
+			}
+		}
 		target := l.lowerExpr(e.Target, mod)
 		offset := 0
 		if target.Type() != nil {

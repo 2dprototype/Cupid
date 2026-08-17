@@ -1,4 +1,6 @@
 /fasm
 *.exe
+*.asm
 /examples/*.exe
+/examples/*.asm
 plan.md

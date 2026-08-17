@@ -443,11 +443,41 @@ func (tc *TypeChecker) typeCheckCallExpr(ce *ast.CallExpr, mod *modules.Module) 
 		fd, _ = decl.(*ast.FuncDecl)
 	}
 
+	isMethodCall := false
 	if fd == nil {
-		// Might be a selector expression, check target
+		// Might be a selector expression (module.func or struct.method)
 		if se, ok := ce.Function.(*ast.SelectorExpr); ok {
 			if d, ok := tc.resolutions[se]; ok {
 				fd, _ = d.(*ast.FuncDecl)
+			} else {
+				targetType := tc.TypeCheckExpr(se.Target, mod)
+				if targetType != nil {
+					typeName := targetType.String()
+					if ptr, ok := targetType.(*ast.PointerType); ok {
+						typeName = ptr.To.String()
+					}
+					// Look up in impl blocks across modules
+					for _, m := range tc.modules {
+						for _, decl := range m.AST.Decls {
+							if id, ok := decl.(*ast.ImplDecl); ok && id.Target.String() == typeName {
+								for _, method := range id.Methods {
+									if method.Name == se.Field {
+										fd = method
+										tc.resolutions[se] = fd
+										isMethodCall = true
+										break
+									}
+								}
+							}
+							if fd != nil {
+								break
+							}
+						}
+						if fd != nil {
+							break
+						}
+					}
+				}
 			}
 		}
 	}
@@ -464,7 +494,6 @@ func (tc *TypeChecker) typeCheckCallExpr(ce *ast.CallExpr, mod *modules.Module) 
 			return nil
 		}
 		fd = tc.monomorphizeFunc(fd, ce.Generics, mod)
-		// Update resolutions to point to the specialized function decl
 		tc.resolutions[ce.Function] = fd
 		if ident, ok := ce.Function.(*ast.IdentExpr); ok {
 			ident.Name = fd.Name
@@ -476,13 +505,19 @@ func (tc *TypeChecker) typeCheckCallExpr(ce *ast.CallExpr, mod *modules.Module) 
 	}
 
 	// Validate arguments
-	if len(ce.Args) != len(fd.Params) {
-		tc.reportError(ce.Pos(), fmt.Sprintf("argument count mismatch: expected %d, got %d", len(fd.Params), len(ce.Args)), "E410", 1)
+	paramStart := 0
+	if isMethodCall && len(fd.Params) > 0 && fd.Params[0].Name == "self" {
+		paramStart = 1
+	}
+
+	expectedArgs := len(fd.Params) - paramStart
+	if len(ce.Args) != expectedArgs {
+		tc.reportError(ce.Pos(), fmt.Sprintf("argument count mismatch: expected %d, got %d", expectedArgs, len(ce.Args)), "E410", 1)
 		return nil
 	}
 
 	for i, arg := range ce.Args {
-		paramType := fd.Params[i].Type
+		paramType := fd.Params[i+paramStart].Type
 		argType := tc.TypeCheckExpr(arg, mod)
 		if argType != nil && !tc.TypesEqual(paramType, argType) {
 			tc.reportError(arg.Pos(), fmt.Sprintf("argument type mismatch: expected %q, got %q", paramType.String(), argType.String()), "E401", len(arg.String()))
