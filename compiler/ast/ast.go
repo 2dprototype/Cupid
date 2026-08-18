@@ -782,3 +782,28 @@ func (ale *ArrayLiteralExpr) String() string {
 	return "[" + strings.Join(parts, ", ") + "]"
 }
 func (ale *ArrayLiteralExpr) exprNode() {}
+
+// TypeCastExpr represents type casting: i32(7), f64(3.14), etc.
+// Can also be used for struct initialization with type name
+type TypeCastExpr struct {
+	Position Position
+	TargetType Type // The target type being cast to
+	Value    Expr  // The value being cast
+}
+func (tc *TypeCastExpr) Pos() Position { return tc.Position }
+func (tc *TypeCastExpr) String() string {
+	return tc.TargetType.String() + "(" + tc.Value.String() + ")"
+}
+func (tc *TypeCastExpr) exprNode() {}
+
+// TypeofExpr represents the typeof() operator: typeof(x)
+// Returns the type of the expression
+type TypeofExpr struct {
+	Position Position
+	Value    Expr // The expression to get the type of
+}
+func (te *TypeofExpr) Pos() Position { return te.Position }
+func (te *TypeofExpr) String() string {
+	return "typeof(" + te.Value.String() + ")"
+}
+func (te *TypeofExpr) exprNode() {}
