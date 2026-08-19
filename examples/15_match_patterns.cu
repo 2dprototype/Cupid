@@ -1,6 +1,6 @@
 // 15_match_patterns.cu: Pattern matching with integers, booleans, and wildcard defaults
 
-fn describe_code(code: i64) {
+fn describe_code(code: i32) {
     match code {
         200 => {
             println("OK: Success")

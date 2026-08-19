@@ -1,8 +1,8 @@
 // 08_vector2d.cu: 2D Vector math and operations
 
 struct Vec2 {
-    x i64
-    y i64
+    x i32
+    y i32
 }
 
 fn vec2_add(v1: Vec2, v2: Vec2) -> Vec2 {
@@ -12,11 +12,11 @@ fn vec2_add(v1: Vec2, v2: Vec2) -> Vec2 {
     }
 }
 
-fn vec2_dot(v1: Vec2, v2: Vec2) -> i64 {
+fn vec2_dot(v1: Vec2, v2: Vec2) -> i32 {
     return (v1.x * v2.x) + (v1.y * v2.y)
 }
 
-fn vec2_length_squared(v: Vec2) -> i64 {
+fn vec2_length_squared(v: Vec2) -> i32 {
     return (v.x * v.x) + (v.y * v.y)
 }
 

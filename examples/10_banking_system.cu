@@ -1,12 +1,12 @@
 // 10_banking_system.cu: Struct-based banking simulation
 
 struct BankAccount {
-    account_id i64
-    balance i64
+    account_id i32
+    balance i32
     active bool
 }
 
-fn deposit(mut acc: BankAccount, amount: i64) -> BankAccount {
+fn deposit(mut acc: BankAccount, amount: i32) -> BankAccount {
     if acc.active && amount > 0 {
         acc.balance += amount
         println("Deposited amount:")
@@ -15,7 +15,7 @@ fn deposit(mut acc: BankAccount, amount: i64) -> BankAccount {
     return acc
 }
 
-fn withdraw(mut acc: BankAccount, amount: i64) -> BankAccount {
+fn withdraw(mut acc: BankAccount, amount: i32) -> BankAccount {
     if acc.active && amount > 0 && acc.balance >= amount {
         acc.balance -= amount
         println("Withdrew amount:")

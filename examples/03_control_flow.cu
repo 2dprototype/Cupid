@@ -1,16 +1,18 @@
 // 03_control_flow.cu: Conditional branching and loops
 
-fn check_value(n: i64) {
+fn check_value(n: i32) {
     if n > 50 {
         println("Greater than 50")
-    } else if n == 50 {
+    } 
+    else if n == 50 {
         println("Exactly 50")
-    } else {
+    }
+    else {
         println("Less than 50")
     }
 }
 
-fn factorial(n: i64) -> i64 {
+fn factorial(n: i32) -> i32 {
     if n <= 1 {
         return 1
     }

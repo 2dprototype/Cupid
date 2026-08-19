@@ -15,8 +15,8 @@ fn compute(x: i64, y: i64) -> i64 {
 }
 
 fn main() {
-    let a = 10
-    let b = 25
+    let a: i64 = 10
+    let b: i64 = 25
     let result = compute(a, b)
     println(result)
 }

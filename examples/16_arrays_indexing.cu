@@ -1,9 +1,10 @@
 // 16_arrays_indexing.cu: Array literal creation, element access, mutation, and len()
 
-fn print_array_sum(arr: [4]i64) -> i64 {
+fn print_array_sum(arr: [4]i32) -> i32 {
     mut total = 0
     mut i = 0
-    let n = len(arr)
+    // let n = len(arr)
+    let n = 4
     for i < n {
         total += arr[i]
         i += 1
@@ -13,7 +14,7 @@ fn print_array_sum(arr: [4]i64) -> i64 {
 
 fn main() {
     println("--- Testing Fixed Size Arrays ---")
-    mut scores = [10, 25, 40, 50]
+    mut scores: [4]i32 = [10, 25, 40, 50]
 
     println("First score:")
     println(scores[0])

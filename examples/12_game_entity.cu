@@ -1,14 +1,14 @@
 // 12_game_entity.cu: Game entity simulation with health, position, and damage
 
 struct Entity {
-    id i64
-    x i64
-    y i64
-    hp i64
+    id i32
+    x i32
+    y i32
+    hp i32
     alive bool
 }
 
-fn apply_damage(mut e: Entity, dmg: i64) -> Entity {
+fn apply_damage(mut e: Entity, dmg: i32) -> Entity {
     e.hp -= dmg
     if e.hp <= 0 {
         e.hp = 0
@@ -17,7 +17,7 @@ fn apply_damage(mut e: Entity, dmg: i64) -> Entity {
     return e
 }
 
-fn move_entity(mut e: Entity, dx: i64, dy: i64) -> Entity {
+fn move_entity(mut e: Entity, dx: i32, dy: i32) -> Entity {
     e.x += dx
     e.y += dy
     return e

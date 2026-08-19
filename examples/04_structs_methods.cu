@@ -1,20 +1,20 @@
 // 04_structs_methods.cu: Struct definitions, instantiation, field access, and methods
 
 struct Player {
-    hp i64
-    score i64
+    hp i32
+    score i32
     alive bool
 }
 
 impl Player {
-    fn damage(mut self, amount: i64) {
+    fn damage(mut self, amount: i32) {
         self.hp -= amount
         if self.hp <= 0 {
             self.alive = false
         }
     }
-
-    fn add_score(mut self, points: i64) {
+    
+    fn add_score(mut self, points: i32) {
         self.score += points
     }
 }

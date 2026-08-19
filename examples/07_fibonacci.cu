@@ -1,6 +1,6 @@
 // 07_fibonacci.cu: Recursive and iterative Fibonacci sequence computation
 
-fn fib_recursive(n: i64) -> i64 {
+fn fib_recursive(n: i32) -> i32 {
     if n <= 0 {
         return 0
     }
@@ -10,7 +10,7 @@ fn fib_recursive(n: i64) -> i64 {
     return fib_recursive(n - 1) + fib_recursive(n - 2)
 }
 
-fn print_fib_sequence(count: i64) {
+fn print_fib_sequence(count: i32) {
     println("Fibonacci numbers:")
     mut a = 0
     mut b = 1
@@ -25,9 +25,9 @@ fn print_fib_sequence(count: i64) {
 }
 
 fn main() {
-    print_fib_sequence(10)
+    print_fib_sequence(32)
     
-    println("10th Fibonacci recursively:")
-    let fib10 = fib_recursive(10)
+    println("32th Fibonacci recursively:")
+    let fib10 = fib_recursive(32)
     println(fib10)
 }
