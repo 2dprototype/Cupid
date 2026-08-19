@@ -1239,6 +1239,16 @@ func (p *Parser) parseBinaryExpr(left ast.Expr) ast.Expr {
 	return &ast.BinaryExpr{Position: pos, Op: op, Left: left, Right: right}
 }
 
+// primitiveCastTypes lists every scalar type name that may be used on the
+// left of a cast expression: typename(value), e.g. i64(239), f32(2323).
+var primitiveCastTypes = map[string]bool{
+	"i8": true, "i16": true, "i32": true, "i64": true,
+	"u8": true, "u16": true, "u32": true, "u64": true,
+	"int": true, "uint": true, "usize": true, "isize": true,
+	"f32": true, "f64": true,
+	"bool": true, "char": true, "string": true,
+}
+
 func (p *Parser) parseCallExpr(function ast.Expr) ast.Expr {
 	pos := ast.Position{File: p.curToken.File, Line: p.curToken.Line, Col: p.curToken.Col}
 	args := []ast.Expr{}
@@ -1251,6 +1261,45 @@ func (p *Parser) parseCallExpr(function ast.Expr) ast.Expr {
 		}
 	}
 	p.expectPeek(lexer.RPAREN)
+
+	// typename(value) is a type cast, and typeof(value) yields the static
+	// type name as a string. Both are recognized here, before falling back
+	// to an ordinary function call, so `i64(239)` never becomes a call to
+	// a (nonexistent) function named "i64".
+	if ident, ok := function.(*ast.IdentExpr); ok {
+		if ident.Name == "typeof" {
+			if len(args) != 1 {
+				p.error(diagnostics.Diagnostic{
+					Code:    "E110",
+					Message: fmt.Sprintf("typeof expects exactly 1 argument, got %d", len(args)),
+					File:    pos.File,
+					Line:    pos.Line,
+					Column:  pos.Col,
+					SpanLen: 7,
+				})
+				return nil
+			}
+			return &ast.TypeofExpr{Position: pos, Value: args[0]}
+		}
+		if primitiveCastTypes[ident.Name] {
+			if len(args) != 1 {
+				p.error(diagnostics.Diagnostic{
+					Code:    "E111",
+					Message: fmt.Sprintf("type cast %q expects exactly 1 argument, got %d", ident.Name, len(args)),
+					File:    pos.File,
+					Line:    pos.Line,
+					Column:  pos.Col,
+					SpanLen: len(ident.Name),
+				})
+				return nil
+			}
+			return &ast.TypeCastExpr{
+				Position:   pos,
+				TargetType: &ast.PrimitiveType{Position: ident.Position, Name: ident.Name},
+				Value:      args[0],
+			}
+		}
+	}
 
 	return &ast.CallExpr{
 		Position: pos,

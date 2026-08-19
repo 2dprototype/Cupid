@@ -1,6 +1,7 @@
 package optimizer
 
 import (
+	"cupid/compiler/hir"
 	"cupid/compiler/mir"
 	"strconv"
 )
@@ -49,9 +50,75 @@ func (opt *Optimizer) foldConstants(fn *mir.MIRFunction) {
 							}
 						}
 					}
+				} else if cast, ok := assign.Src.(*mir.CastRvalue); ok {
+					if folded, ok := opt.evalConstCast(cast); ok {
+						assign.Src = &mir.UseRvalue{
+							Op: mir.Operand{
+								Kind:     mir.OpConst,
+								Constant: folded,
+								Type:     assign.Dest.Type,
+							},
+						}
+					}
 				}
 			}
 		}
+	}
+}
+
+// evalConstCast folds i64(7), u8(300), bool(0), etc. when the operand is
+// already a literal integer constant, so obviously-constant casts don't
+// cost an instruction at runtime. Float and string casts are left for
+// codegen: they need real conversion/formatting instructions, not just
+// text rewriting.
+func (opt *Optimizer) evalConstCast(cast *mir.CastRvalue) (string, bool) {
+	if cast.Value.Kind != mir.OpConst || cast.FromType == nil || cast.ToType == nil {
+		return "", false
+	}
+	if !isConstFoldableIntKind(cast.FromType.Kind) || !isConstFoldableIntKind(cast.ToType.Kind) {
+		return "", false
+	}
+	v, err := strconv.ParseInt(cast.Value.Constant, 10, 64)
+	if err != nil {
+		return "", false
+	}
+	return truncateToKind(v, cast.ToType.Kind), true
+}
+
+func isConstFoldableIntKind(k hir.HIRTypeKind) bool {
+	switch k {
+	case hir.TypeI8, hir.TypeI16, hir.TypeI32, hir.TypeI64,
+		hir.TypeU8, hir.TypeU16, hir.TypeU32, hir.TypeU64, hir.TypeBool:
+		return true
+	}
+	return false
+}
+
+// truncateToKind applies the same wraparound/sign-extension semantics as
+// the backend's runtime cast instructions, but at compile time.
+func truncateToKind(v int64, k hir.HIRTypeKind) string {
+	switch k {
+	case hir.TypeBool:
+		if v != 0 {
+			return "true"
+		}
+		return "false"
+	case hir.TypeI8:
+		return strconv.FormatInt(int64(int8(v)), 10)
+	case hir.TypeI16:
+		return strconv.FormatInt(int64(int16(v)), 10)
+	case hir.TypeI32:
+		return strconv.FormatInt(int64(int32(v)), 10)
+	case hir.TypeU8:
+		return strconv.FormatUint(uint64(uint8(v)), 10)
+	case hir.TypeU16:
+		return strconv.FormatUint(uint64(uint16(v)), 10)
+	case hir.TypeU32:
+		return strconv.FormatUint(uint64(uint32(v)), 10)
+	case hir.TypeU64:
+		return strconv.FormatUint(uint64(v), 10)
+	default: // TypeI64
+		return strconv.FormatInt(v, 10)
 	}
 }
 

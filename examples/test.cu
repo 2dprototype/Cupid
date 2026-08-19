@@ -1,8 +1,9 @@
 
+
 fn main() {
-	mut i = 0
-	for i < 100000 {
-		println(i)
-		i += 1
-	}
+    mut x: i32 = 20
+	println(x) //works   
+	
+	let y: i64 = 20
+	println(y) //error
 }

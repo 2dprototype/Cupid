@@ -1,11 +1,11 @@
 // vector_lib.cu: Exported struct and functions for module import testing
 
 export struct Vector {
-    x i64
-    y i64
+    x i32
+    y i32
 }
 
-export fn create_vector(x: i64, y: i64) -> Vector {
+export fn create_vector(x: i32, y: i32) -> Vector {
     return Vector{
         x: x
         y: y

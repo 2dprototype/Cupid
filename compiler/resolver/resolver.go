@@ -349,6 +349,11 @@ func (r *Resolver) resolveExpr(expr ast.Expr, mod *modules.Module, scope *Scope)
 		}
 	case *ast.QuestionExpr:
 		r.resolveExpr(e.Target, mod, scope)
+	case *ast.TypeCastExpr:
+		r.resolveType(e.TargetType, mod, scope)
+		r.resolveExpr(e.Value, mod, scope)
+	case *ast.TypeofExpr:
+		r.resolveExpr(e.Value, mod, scope)
 	}
 }
 
@@ -414,7 +419,9 @@ func (r *Resolver) resolveType(t ast.Type, mod *modules.Module, scope *Scope) {
 	case *ast.PrimitiveType:
 		// If it's a built-in type (i32, f64, bool, string, etc.), do nothing
 		switch pt.Name {
-		case "i32", "i64", "u32", "u64", "f32", "f64", "bool", "string", "char", "void", "self", "Self":
+		case "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64",
+			"int", "uint", "usize", "isize",
+			"f32", "f64", "bool", "string", "char", "void", "self", "Self":
 			return
 		}
 

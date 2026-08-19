@@ -341,6 +341,20 @@ type HIRArrayInitExpr struct {
 func (e *HIRArrayInitExpr) hirExpr()        {}
 func (e *HIRArrayInitExpr) Type() *HIRType { return e.Typ }
 
+// HIRCastExpr represents a runtime type conversion produced by
+// `typename(value)` syntax (e.g. i64(239), f32(2323), string(x)).
+// `typeof(x)` does NOT lower to this node — since Cupid is statically
+// typed, typeof is resolved to a constant string literal at lowering time
+// (see Lowerer.lowerExpr's *ast.TypeofExpr case) and needs no runtime
+// support at all.
+type HIRCastExpr struct {
+	Value HIRExpr
+	Typ   *HIRType
+}
+
+func (e *HIRCastExpr) hirExpr()        {}
+func (e *HIRCastExpr) Type() *HIRType { return e.Typ }
+
 // Lowering AST to HIR
 type Lowerer struct {
 	modules     map[string]*modules.Module
@@ -778,6 +792,32 @@ func (l *Lowerer) lowerExpr(expr ast.Expr, mod *modules.Module) HIRExpr {
 			Elements: elements,
 			Typ:      hirType,
 		}
+	case *ast.TypeCastExpr:
+		val := l.lowerExpr(e.Value, mod)
+		castType := hirType
+		if castType == nil {
+			castType = l.convertType(e.TargetType)
+		}
+		return &HIRCastExpr{
+			Value: val,
+			Typ:   castType,
+		}
+	case *ast.TypeofExpr:
+		// Cupid has no runtime type info: the operand's static type is
+		// known here, at compile time, so typeof folds straight to a
+		// string constant instead of generating any code for its operand.
+		typeName := "void"
+		if vt, ok := l.tc.ExprTypes[e.Value]; ok && vt != nil {
+			typeName = vt.String()
+		}
+		strType := hirType
+		if strType == nil {
+			strType = &HIRType{Kind: TypeString, Name: "string"}
+		}
+		return &HIRLiteral{
+			Typ:   strType,
+			Value: typeName,
+		}
 	}
 
 	return nil
@@ -805,7 +845,7 @@ func (l *Lowerer) convertType(astType ast.Type) *HIRType {
 			return &HIRType{Kind: TypeI16, Name: "i16"}
 		case "i32", "int":
 			return &HIRType{Kind: TypeI32, Name: "i32"}
-		case "i64":
+		case "i64", "isize":
 			return &HIRType{Kind: TypeI64, Name: "i64"}
 		case "u8":
 			return &HIRType{Kind: TypeU8, Name: "u8"}

@@ -7,6 +7,7 @@ import (
 	"cupid/compiler/modules"
 	"fmt"
 	"strings"
+	"strconv"
 )
 
 type TypeChecker struct {
@@ -31,6 +32,58 @@ func (tc *TypeChecker) Errors() []error {
 	return tc.errors
 }
 
+// isIntegerType returns true if t is a primitive integer type.
+func isIntegerType(t ast.Type) bool {
+    if prim, ok := t.(*ast.PrimitiveType); ok {
+        switch canonicalTypeName(prim.Name) {
+        case "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64":
+            return true
+        }
+    }
+    return false
+}
+
+// isFloatType returns true if t is f32 or f64.
+func isFloatType(t ast.Type) bool {
+    if prim, ok := t.(*ast.PrimitiveType); ok {
+        name := canonicalTypeName(prim.Name)
+        return name == "f32" || name == "f64"
+    }
+    return false
+}
+
+// literalFitsInType checks whether a literal integer or float can be assigned to target type.
+// For integers, it verifies the value is within the target range.
+// For floats, any finite literal is accepted (precision loss for f32 is allowed).
+func literalFitsInType(lit *ast.LiteralExpr, target ast.Type) bool {
+    if lit.Type == lexer.INT {
+        val, err := strconv.ParseInt(lit.Value, 10, 64)
+        if err != nil {
+            return false
+        }
+        if prim, ok := target.(*ast.PrimitiveType); ok {
+            name := canonicalTypeName(prim.Name)
+            switch name {
+            case "i8":  return val >= -128 && val <= 127
+            case "i16": return val >= -32768 && val <= 32767
+            case "i32": return val >= -2147483648 && val <= 2147483647
+            case "i64": return true // all signed 64-bit values fit
+            case "u8":  return val >= 0 && val <= 255
+            case "u16": return val >= 0 && val <= 65535
+            case "u32": return val >= 0 && val <= 4294967295
+            case "u64": return val >= 0 // all non-negative values fit
+            }
+        }
+        return false
+    }
+    if lit.Type == lexer.FLOAT {
+        // Any finite float can be assigned to f32 or f64; we don't check overflow.
+        return isFloatType(target)
+    }
+    return false
+}
+
+
 func isIntType(name string) bool {
 	switch name {
 	case "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "int", "uint", "usize", "isize":
@@ -42,9 +95,9 @@ func isIntType(name string) bool {
 func canonicalTypeName(name string) string {
 	switch name {
 	case "int":
-		return "i64"
+		return "i32"
 	case "uint":
-		return "u64"
+		return "u32"
 	case "usize":
 		return "u64"
 	case "isize":
@@ -52,6 +105,28 @@ func canonicalTypeName(name string) string {
 	default:
 		return name
 	}
+}
+
+// castableTypes lists every scalar type name that a TypeCastExpr may
+// legally target or originate from.
+var castableTypes = map[string]bool{
+	"i8": true, "i16": true, "i32": true, "i64": true,
+	"u8": true, "u16": true, "u32": true, "u64": true,
+	"int": true, "uint": true, "usize": true, "isize": true,
+	"f32": true, "f64": true,
+	"bool": true, "char": true, "string": true,
+}
+
+// isCastableCombination reports whether a value of type `from` may be cast
+// to type `to`. Every scalar combination is allowed except parsing a string
+// into a number/bool/char, which the backend does not implement (it would
+// require fallible parsing with no error-handling story yet); casting *to*
+// string is always allowed and formats the value at runtime.
+func isCastableCombination(from, to string) bool {
+	if from == "string" && to != "string" {
+		return false
+	}
+	return true
 }
 
 func (tc *TypeChecker) TypesEqual(t1, t2 ast.Type) bool {
@@ -176,17 +251,68 @@ func (tc *TypeChecker) typeCheckStmt(stmt ast.Stmt, expectedRet ast.Type, mod *m
 		}
 		valType := tc.TypeCheckExpr(s.Value, mod)
 		if expectedType != nil && valType != nil {
+			// Array size check
 			if arrType, ok := expectedType.(*ast.ArrayType); ok {
 				if arrLit, ok := s.Value.(*ast.ArrayLiteralExpr); ok {
 					if arrType.Size != -1 && len(arrLit.Elements) != arrType.Size {
-						tc.reportError(s.Value.Pos(), fmt.Sprintf("array size mismatch in variable %q: expected [%d]%s, got [%d]%s", s.Name, arrType.Size, arrType.Element.String(), len(arrLit.Elements), arrType.Element.String()), "E401", len(s.Name))
+						tc.reportError(s.Value.Pos(),
+							fmt.Sprintf("array size mismatch in variable %q: expected [%d]%s, got [%d]%s",
+								s.Name, arrType.Size, arrType.Element.String(),
+								len(arrLit.Elements), arrType.Element.String()),
+							"E401", len(s.Name))
 					}
 				}
 			}
+
+			// Main type equality check with implicit literal conversion
 			if !tc.TypesEqual(expectedType, valType) {
-				tc.reportError(s.Pos(), fmt.Sprintf("type mismatch in variable binding %q: expected %q, got %q", s.Name, expectedType.String(), valType.String()), "E401", len(s.Name))
+				// Try to convert if the RHS is a literal integer or float
+				if lit, ok := s.Value.(*ast.LiteralExpr); ok && (lit.Type == lexer.INT || lit.Type == lexer.FLOAT) {
+					if literalFitsInType(lit, expectedType) {
+						// Accept the binding – update the expression type to the expected type
+						tc.ExprTypes[s.Value] = expectedType
+						// Now we consider it type‑correct; no error reported
+					} else {
+						tc.reportError(s.Pos(),
+							fmt.Sprintf("literal %q does not fit in type %q", lit.Value, expectedType.String()),
+							"E401", len(s.Name))
+					}
+				} else {
+					// No implicit conversion possible – report mismatch
+					tc.reportError(s.Pos(),
+						fmt.Sprintf("type mismatch in variable binding %q: expected %q, got %q",
+							s.Name, expectedType.String(), valType.String()),
+						"E401", len(s.Name))
+				}
 			}
 		}
+case *ast.ConstStmt:
+    var expectedType ast.Type
+    if s.Type != nil {
+        s.Type = tc.resolveAndValidateType(s.Type, mod)
+        expectedType = s.Type
+    }
+    valType := tc.TypeCheckExpr(s.Value, mod)
+    if expectedType != nil && valType != nil {
+        // Main type equality check with implicit literal conversion
+        if !tc.TypesEqual(expectedType, valType) {
+            if lit, ok := s.Value.(*ast.LiteralExpr); ok && (lit.Type == lexer.INT || lit.Type == lexer.FLOAT) {
+                if literalFitsInType(lit, expectedType) {
+                    // Accept the binding – update the expression type to the expected type
+                    tc.ExprTypes[s.Value] = expectedType
+                } else {
+                    tc.reportError(s.Pos(),
+                        fmt.Sprintf("literal %q does not fit in type %q", lit.Value, expectedType.String()),
+                        "E401", len(s.Name))
+                }
+            } else {
+                tc.reportError(s.Pos(),
+                    fmt.Sprintf("type mismatch in constant binding %q: expected %q, got %q",
+                        s.Name, expectedType.String(), valType.String()),
+                    "E401", len(s.Name))
+            }
+        }
+    }
 	case *ast.ReturnStmt:
 		var actualRet ast.Type = &ast.PrimitiveType{Position: s.Pos(), Name: "void"}
 		if s.Value != nil {
@@ -302,6 +428,10 @@ func (tc *TypeChecker) TypeCheckExpr(expr ast.Expr, mod *modules.Module) ast.Typ
 	case *ast.QuestionExpr:
 		targetType := tc.TypeCheckExpr(e.Target, mod)
 		t = targetType // simplify for now
+	case *ast.TypeCastExpr:
+		t = tc.typeCheckTypeCastExpr(e, mod)
+	case *ast.TypeofExpr:
+		t = tc.typeCheckTypeofExpr(e, mod)
 	}
 
 	if t != nil {
@@ -402,6 +532,46 @@ func (tc *TypeChecker) typeCheckUnaryExpr(ue *ast.UnaryExpr, mod *modules.Module
 		return rightType
 	}
 	return rightType
+}
+
+// typeCheckTypeCastExpr validates `typename(value)` casts: typename(data)`,
+// e.g. i64(239), f32(2323). Both TargetType and the operand must be scalar
+// primitive types; the resulting type is always exactly TargetType.
+func (tc *TypeChecker) typeCheckTypeCastExpr(tce *ast.TypeCastExpr, mod *modules.Module) ast.Type {
+	srcType := tc.TypeCheckExpr(tce.Value, mod)
+	tce.TargetType = tc.resolveAndValidateType(tce.TargetType, mod)
+
+	targetPrim, targetOk := tce.TargetType.(*ast.PrimitiveType)
+	if !targetOk || !castableTypes[targetPrim.Name] {
+		tc.reportError(tce.Pos(), fmt.Sprintf("cannot cast to non-scalar type %q", tce.TargetType.String()), "E420", len(tce.TargetType.String()))
+		return tce.TargetType
+	}
+
+	if srcType == nil {
+		// The operand already reported its own error; don't cascade.
+		return tce.TargetType
+	}
+
+	srcPrim, srcOk := srcType.(*ast.PrimitiveType)
+	if !srcOk || !castableTypes[srcPrim.Name] {
+		tc.reportError(tce.Value.Pos(), fmt.Sprintf("cannot cast value of type %q to %q", srcType.String(), tce.TargetType.String()), "E421", len(tce.Value.String()))
+		return tce.TargetType
+	}
+
+	if !isCastableCombination(srcPrim.Name, targetPrim.Name) {
+		tc.reportError(tce.Pos(), fmt.Sprintf("unsupported cast from %q to %q (parsing strings to numeric/bool/char is not supported)", srcPrim.Name, targetPrim.Name), "E422", len(tce.TargetType.String()))
+	}
+
+	return tce.TargetType
+}
+
+// typeCheckTypeofExpr validates `typeof(value)`. Cupid is statically typed,
+// so the type of `value` is always known at compile time — typeof never
+// needs to run at runtime. It always yields a string; the actual type name
+// is baked in as a constant during HIR lowering (see hir.go).
+func (tc *TypeChecker) typeCheckTypeofExpr(te *ast.TypeofExpr, mod *modules.Module) ast.Type {
+	tc.TypeCheckExpr(te.Value, mod)
+	return &ast.PrimitiveType{Position: te.Position, Name: "string"}
 }
 
 func (tc *TypeChecker) typeCheckSelectorExpr(se *ast.SelectorExpr, mod *modules.Module) ast.Type {
@@ -633,7 +803,9 @@ func (tc *TypeChecker) resolveAndValidateType(t ast.Type, mod *modules.Module) a
 	case *ast.PrimitiveType:
 		// If custom struct/trait, verify it exists
 		switch pt.Name {
-		case "i32", "i64", "u32", "u64", "f32", "f64", "bool", "string", "char", "void", "self", "Self":
+		case "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64",
+			"int", "uint", "usize", "isize",
+			"f32", "f64", "bool", "string", "char", "void", "self", "Self":
 			return pt
 		}
 		// If in resolutions, it is resolved

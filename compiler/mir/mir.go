@@ -163,6 +163,21 @@ func (s *AsmStmt) String() string {
 	return fmt.Sprintf("  asm: %s", s.Assembly)
 }
 
+// CastRvalue represents a runtime scalar conversion produced by a
+// TypeCastExpr, e.g. i64(x), f32(y), string(z). FromType/ToType are both
+// carried explicitly (rather than re-derived from operand.Type) because
+// the operand's Type is sometimes nil for symbol references.
+type CastRvalue struct {
+	Value    Operand
+	FromType *hir.HIRType
+	ToType   *hir.HIRType
+}
+
+func (r *CastRvalue) rvalue() {}
+func (r *CastRvalue) String() string {
+	return fmt.Sprintf("cast<%s>(%s)", r.ToType.String(), r.Value.String())
+}
+
 type IndexRvalue struct {
 	Base  Operand
 	Index Operand
@@ -647,6 +662,18 @@ func (l *MIRLowerer) lowerExpr(expr hir.HIRExpr, ctx *fnContext) Operand {
 				Base:  baseOp,
 				Index: idxOp,
 				Type:  e.Typ,
+			},
+		})
+		return Operand{Kind: OpLocal, LocalID: destLoc.ID, Type: destLoc.Type}
+	case *hir.HIRCastExpr:
+		valOp := l.lowerExpr(e.Value, ctx)
+		destLoc := ctx.mirFn.NewLocal(e.Typ, "tmp_cast")
+		ctx.currBlock.Statements = append(ctx.currBlock.Statements, &AssignStmt{
+			Dest: destLoc,
+			Src: &CastRvalue{
+				Value:    valOp,
+				FromType: valOp.Type,
+				ToType:   e.Typ,
 			},
 		})
 		return Operand{Kind: OpLocal, LocalID: destLoc.ID, Type: destLoc.Type}

@@ -308,6 +308,15 @@ func (bc *BorrowChecker) checkExpr(expr ast.Expr, env *borrowEnv, mod *modules.M
 			bc.checkExpr(c.Pattern, env, mod, false)
 			bc.checkBlockStmt(c.Body, env, mod)
 		}
+
+	case *ast.TypeCastExpr:
+		// Cast sources are always scalar Copy types (enforced by the type
+		// checker), so this is never a move context, but we still need to
+		// walk into the operand to catch use-after-move / borrow errors.
+		bc.checkExpr(e.Value, env, mod, false)
+
+	case *ast.TypeofExpr:
+		bc.checkExpr(e.Value, env, mod, false)
 	}
 }
 
