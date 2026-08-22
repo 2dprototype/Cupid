@@ -221,6 +221,12 @@ type HIRForStmt struct {
 
 func (s *HIRForStmt) hirStmt() {}
 
+type HIRBreakStmt struct{}
+func (s *HIRBreakStmt) hirStmt() {}
+
+type HIRContinueStmt struct{}
+func (s *HIRContinueStmt) hirStmt() {}
+
 type HIRAsmStmt struct {
 	Assembly string
 }
@@ -547,6 +553,10 @@ func (l *Lowerer) lowerStmt(stmt ast.Stmt, mod *modules.Module) HIRStmt {
 			val = l.lowerExpr(s.Value, mod)
 		}
 		return &HIRReturnStmt{Value: val}
+	case *ast.BreakStmt:
+		return &HIRBreakStmt{}
+	case *ast.ContinueStmt:
+		return &HIRContinueStmt{}
 	case *ast.ExprStmt:
 		// Check for assignment expression desugared in AST
 		if bin, ok := s.Expression.(*ast.BinaryExpr); ok && isAssignmentOp(bin.Op.String()) {

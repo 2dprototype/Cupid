@@ -511,6 +511,16 @@ func (l *MIRLowerer) lowerStmt(stmt hir.HIRStmt, ctx *fnContext) {
 		ctx.loopEnds = ctx.loopEnds[:len(ctx.loopEnds)-1]
 
 		ctx.currBlock = exitBlk
+	case *hir.HIRBreakStmt:
+		if len(ctx.loopEnds) > 0 {
+			ctx.currBlock.Terminator = &BranchTerminator{TargetBlock: ctx.loopEnds[len(ctx.loopEnds)-1]}
+			ctx.currBlock = nil
+		}
+	case *hir.HIRContinueStmt:
+		if len(ctx.loopStarts) > 0 {
+			ctx.currBlock.Terminator = &BranchTerminator{TargetBlock: ctx.loopStarts[len(ctx.loopStarts)-1]}
+			ctx.currBlock = nil
+		}
 	case *hir.HIRAsmStmt:
 		ctx.currBlock.Statements = append(ctx.currBlock.Statements, &AsmStmt{
 			Assembly: s.Assembly,

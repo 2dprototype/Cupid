@@ -367,7 +367,7 @@ func (b *Backend) generateStatement(stmt mir.Statement, fn *mir.MIRFunction, off
 			b.emitElemScaledIndex("rcx", src.Type, out)
 			if src.Base.Kind == mir.OpLocal {
 				baseOffset := offsets[src.Base.LocalID]
-				if src.Base.Type != nil && src.Base.Type.Kind == hir.TypePointer {
+				if src.Base.Type != nil && (src.Base.Type.Kind == hir.TypePointer || (src.Base.Type.Kind == hir.TypeArray && src.Base.Type.Size == 0)) {
 					out.WriteString(fmt.Sprintf("    mov rax, [rbp - %d]\n", baseOffset))
 				} else {
 					out.WriteString(fmt.Sprintf("    mov rax, rbp\n"))
@@ -420,8 +420,12 @@ func (b *Backend) generateStatement(stmt mir.Statement, fn *mir.MIRFunction, off
 			} else if src.Base.Type != nil && src.Base.Type.Kind == hir.TypeArray {
 				if src.Base.Kind == mir.OpLocal {
 					baseOffset := offsets[src.Base.LocalID]
-					out.WriteString(fmt.Sprintf("    mov rax, rbp\n"))
-					out.WriteString(fmt.Sprintf("    sub rax, %d\n", baseOffset))
+					if src.Base.Type.Size == 0 {
+						out.WriteString(fmt.Sprintf("    mov rax, [rbp - %d]\n", baseOffset))
+					} else {
+						out.WriteString(fmt.Sprintf("    mov rax, rbp\n"))
+						out.WriteString(fmt.Sprintf("    sub rax, %d\n", baseOffset))
+					}
 					if src.Low != nil {
 						b.loadOperandToReg(*src.Low, "rcx", offsets, out)
 						b.emitElemScaledIndex("rcx", src.Base.Type.ElemType, out)
@@ -512,8 +516,12 @@ func (b *Backend) generateStatement(stmt mir.Statement, fn *mir.MIRFunction, off
 		b.emitElemScaledIndex("rcx", s.Val.Type, out)
 		if s.Base.Kind == mir.OpLocal {
 			baseOffset := offsets[s.Base.LocalID]
-			out.WriteString(fmt.Sprintf("    mov rax, rbp\n"))
-			out.WriteString(fmt.Sprintf("    sub rax, %d\n", baseOffset))
+			if s.Base.Type != nil && (s.Base.Type.Kind == hir.TypePointer || (s.Base.Type.Kind == hir.TypeArray && s.Base.Type.Size == 0)) {
+				out.WriteString(fmt.Sprintf("    mov rax, [rbp - %d]\n", baseOffset))
+			} else {
+				out.WriteString(fmt.Sprintf("    mov rax, rbp\n"))
+				out.WriteString(fmt.Sprintf("    sub rax, %d\n", baseOffset))
+			}
 			out.WriteString("    add rax, rcx\n")
 
 			fKind := hir.TypeI64

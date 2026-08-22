@@ -370,6 +370,8 @@ func (tc *TypeChecker) typeCheckStmt(stmt ast.Stmt, expectedRet ast.Type, mod *m
 		if actualRet != nil && !tc.checkAssignable(expectedRet, s.Value, actualRet) {
 			tc.reportError(s.Pos(), fmt.Sprintf("type mismatch in return statement: expected %q, got %q", expectedRet.String(), actualRet.String()), "E401", 6)
 		}
+	case *ast.BreakStmt, *ast.ContinueStmt:
+		// valid inside loops, no type checking needed
 	case *ast.ExprStmt:
 		tc.TypeCheckExpr(s.Expression, mod)
 	case *ast.IfStmt:
@@ -1117,6 +1119,10 @@ func (s *Substituter) cloneAndSubstitute(node ast.Node) ast.Node {
 			newVal = s.cloneAndSubstitute(n.Value).(ast.Expr)
 		}
 		cloned = &ast.ReturnStmt{Position: n.Position, Value: newVal}
+	case *ast.BreakStmt:
+		cloned = &ast.BreakStmt{Position: n.Position}
+	case *ast.ContinueStmt:
+		cloned = &ast.ContinueStmt{Position: n.Position}
 	case *ast.ExprStmt:
 		cloned = &ast.ExprStmt{Position: n.Position, Expression: s.cloneAndSubstitute(n.Expression).(ast.Expr)}
 	case *ast.IfStmt:

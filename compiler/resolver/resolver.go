@@ -262,6 +262,8 @@ func (r *Resolver) resolveStmt(stmt ast.Stmt, mod *modules.Module, scope *Scope)
 		if s.Value != nil {
 			r.resolveExpr(s.Value, mod, scope)
 		}
+	case *ast.BreakStmt, *ast.ContinueStmt:
+		// No internal expressions to resolve
 	case *ast.ExprStmt:
 		r.resolveExpr(s.Expression, mod, scope)
 	case *ast.IfStmt:

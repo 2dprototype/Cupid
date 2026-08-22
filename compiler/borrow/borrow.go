@@ -149,8 +149,41 @@ func (bc *BorrowChecker) checkBlockStmt(bs *ast.BlockStmt, env *borrowEnv, mod *
 		env.nestingLevel--
 	}()
 
-	for _, stmt := range bs.Stmts {
+	for i, stmt := range bs.Stmts {
+		// Clean up dead/expired borrows (Non-Lexical Lifetimes)
+		for bName, bList := range env.borrows {
+			newList := []Borrow{}
+			for _, b := range bList {
+				if b.BorrowedBy == "" {
+					continue // temporary borrow expired after its statement
+				}
+				if isIdentUsedInStmts(b.BorrowedBy, bs.Stmts[i:]) {
+					newList = append(newList, b)
+				}
+			}
+			if len(newList) == 0 {
+				delete(env.borrows, bName)
+			} else {
+				env.borrows[bName] = newList
+			}
+		}
+
 		bc.checkStmt(stmt, env, mod)
+
+		// Clean up temporary anonymous borrows created during this statement
+		for bName, bList := range env.borrows {
+			newList := []Borrow{}
+			for _, b := range bList {
+				if b.BorrowedBy != "" {
+					newList = append(newList, b)
+				}
+			}
+			if len(newList) == 0 {
+				delete(env.borrows, bName)
+			} else {
+				env.borrows[bName] = newList
+			}
+		}
 	}
 }
 
@@ -180,6 +213,9 @@ func (bc *BorrowChecker) checkStmt(stmt ast.Stmt, env *borrowEnv, mod *modules.M
 		if s.Value != nil {
 			bc.checkExpr(s.Value, env, mod, true) // return moves value
 		}
+
+	case *ast.BreakStmt, *ast.ContinueStmt:
+		// Control flow statements have no variable moves or borrows
 
 	case *ast.ExprStmt:
 		// Check assignments
@@ -386,4 +422,110 @@ func (bc *BorrowChecker) reportError(pos ast.Position, msg string, code string, 
 		SpanLen: spanLen,
 	}
 	bc.errors = append(bc.errors, diag)
+}
+
+func isIdentUsedInExpr(name string, expr ast.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	switch e := expr.(type) {
+	case *ast.IdentExpr:
+		return e.Name == name
+	case *ast.BinaryExpr:
+		return isIdentUsedInExpr(name, e.Left) || isIdentUsedInExpr(name, e.Right)
+	case *ast.UnaryExpr:
+		return isIdentUsedInExpr(name, e.Right)
+	case *ast.RefExpr:
+		return isIdentUsedInExpr(name, e.Target)
+	case *ast.DerefExpr:
+		return isIdentUsedInExpr(name, e.Target)
+	case *ast.SelectorExpr:
+		return isIdentUsedInExpr(name, e.Target)
+	case *ast.IndexExpr:
+		return isIdentUsedInExpr(name, e.Target) || isIdentUsedInExpr(name, e.Index)
+	case *ast.SliceExpr:
+		return isIdentUsedInExpr(name, e.Target) || isIdentUsedInExpr(name, e.Low) || isIdentUsedInExpr(name, e.High)
+	case *ast.CallExpr:
+		if isIdentUsedInExpr(name, e.Function) {
+			return true
+		}
+		for _, arg := range e.Args {
+			if isIdentUsedInExpr(name, arg) {
+				return true
+			}
+		}
+		return false
+	case *ast.StructInitExpr:
+		for _, f := range e.Fields {
+			if isIdentUsedInExpr(name, f.Value) {
+				return true
+			}
+		}
+		return false
+	case *ast.ArrayLiteralExpr:
+		for _, el := range e.Elements {
+			if isIdentUsedInExpr(name, el) {
+				return true
+			}
+		}
+		return false
+	case *ast.TypeCastExpr:
+		return isIdentUsedInExpr(name, e.Value)
+	}
+	return false
+}
+
+func isIdentUsedInStmt(name string, stmt ast.Stmt) bool {
+	if stmt == nil {
+		return false
+	}
+	switch s := stmt.(type) {
+	case *ast.LetStmt:
+		return isIdentUsedInExpr(name, s.Value)
+	case *ast.ConstStmt:
+		return isIdentUsedInExpr(name, s.Value)
+	case *ast.ReturnStmt:
+		return isIdentUsedInExpr(name, s.Value)
+	case *ast.ExprStmt:
+		return isIdentUsedInExpr(name, s.Expression)
+	case *ast.IfStmt:
+		if isIdentUsedInExpr(name, s.Condition) || isIdentUsedInBlock(name, s.ThenBlock) {
+			return true
+		}
+		if s.ElseBlock != nil {
+			return isIdentUsedInStmt(name, s.ElseBlock)
+		}
+		return false
+	case *ast.ForStmt:
+		if isIdentUsedInExpr(name, s.RangeExpr) || isIdentUsedInBlock(name, s.Body) {
+			return true
+		}
+		return false
+	case *ast.BlockStmt:
+		return isIdentUsedInBlock(name, s)
+	case *ast.UnsafeBlock:
+		return isIdentUsedInBlock(name, s.Block)
+	}
+	return false
+}
+
+func isIdentUsedInBlock(name string, bs *ast.BlockStmt) bool {
+	if bs == nil {
+		return false
+	}
+	for _, s := range bs.Stmts {
+		if isIdentUsedInStmt(name, s) {
+			return true
+		}
+	}
+	return false
+}
+
+func isIdentUsedInStmts(name string, stmts []ast.Stmt) bool {
+	for _, s := range stmts {
+		if isIdentUsedInStmt(name, s) {
+			return true
+		}
+	}
+	return false
 }

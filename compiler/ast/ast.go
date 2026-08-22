@@ -481,6 +481,20 @@ func (rs *ReturnStmt) String() string {
 }
 func (rs *ReturnStmt) stmtNode() {}
 
+type BreakStmt struct {
+	Position Position
+}
+func (bs *BreakStmt) Pos() Position { return bs.Position }
+func (bs *BreakStmt) String() string { return "break" }
+func (bs *BreakStmt) stmtNode() {}
+
+type ContinueStmt struct {
+	Position Position
+}
+func (cs *ContinueStmt) Pos() Position { return cs.Position }
+func (cs *ContinueStmt) String() string { return "continue" }
+func (cs *ContinueStmt) stmtNode() {}
+
 type GoStmt struct {
 	Position Position
 	Call     *CallExpr

@@ -731,6 +731,10 @@ func (p *Parser) parseStmt() ast.Stmt {
 		return p.parseConstStmt()
 	case lexer.RETURN:
 		return p.parseReturnStmt()
+	case lexer.BREAK:
+		return p.parseBreakStmt()
+	case lexer.CONTINUE:
+		return p.parseContinueStmt()
 	case lexer.GO:
 		return p.parseGoStmt()
 	case lexer.SELECT:
@@ -819,6 +823,16 @@ func (p *Parser) parseReturnStmt() *ast.ReturnStmt {
 	}
 
 	return &ast.ReturnStmt{Position: pos, Value: val}
+}
+
+func (p *Parser) parseBreakStmt() *ast.BreakStmt {
+	pos := ast.Position{File: p.curToken.File, Line: p.curToken.Line, Col: p.curToken.Col}
+	return &ast.BreakStmt{Position: pos}
+}
+
+func (p *Parser) parseContinueStmt() *ast.ContinueStmt {
+	pos := ast.Position{File: p.curToken.File, Line: p.curToken.Line, Col: p.curToken.Col}
+	return &ast.ContinueStmt{Position: pos}
 }
 
 func (p *Parser) parseGoStmt() *ast.GoStmt {

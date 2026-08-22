@@ -42,6 +42,8 @@ const (
 	FOR
 	RETURN
 	WHERE
+	BREAK
+	CONTINUE
 
 
 	// Operators & Symbols
@@ -119,6 +121,8 @@ var tokenNames = map[TokenType]string{
 	FOR:      "for",
 	RETURN:   "return",
 	WHERE:    "where",
+	BREAK:    "break",
+	CONTINUE: "continue",
 
 	ADD:      "+",
 	SUB:      "-",
@@ -198,8 +202,10 @@ var keywords = map[string]TokenType{
 	"if":      IF,
 	"else":    ELSE,
 	"for":     FOR,
-	"return":  RETURN,
-	"where":   WHERE,
+	"return":   RETURN,
+	"where":    WHERE,
+	"break":    BREAK,
+	"continue": CONTINUE,
 }
 
 type Lexer struct {
