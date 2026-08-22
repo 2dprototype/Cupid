@@ -157,6 +157,23 @@ func (r *Resolver) resolveFuncDecl(fd *ast.FuncDecl, mod *modules.Module, parent
 		})
 	}
 
+	// Add receiver to scope if present
+	if fd.Receiver != nil {
+		r.resolveType(fd.Receiver.Type, mod, funcScope)
+		sym := &Symbol{
+			Name:     fd.Receiver.Name,
+			Kind:     SymVar,
+			DeclNode: fd.Receiver,
+			IsMut:    fd.Receiver.Mutable,
+		}
+		if ptr, ok := fd.Receiver.Type.(*ast.PointerType); ok && ptr.Mutable {
+			sym.IsMut = true
+			fd.Receiver.Mutable = true
+		}
+		funcScope.Insert(sym)
+		r.Resolutions[fd.Receiver] = fd.Receiver
+	}
+
 	// Resolve parameter types and add params to scope
 	for i := range fd.Params {
 		p := &fd.Params[i]

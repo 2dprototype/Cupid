@@ -193,6 +193,43 @@ func (p *Parser) parseImportDecl() *ast.ImportDecl {
 func (p *Parser) parseFuncDecl(exported bool) *ast.FuncDecl {
 	pos := ast.Position{File: p.curToken.File, Line: p.curToken.Line, Col: p.curToken.Col}
 
+	var receiver *ast.Param
+	if p.peekTokenIs(lexer.LPAREN) {
+		p.nextToken() // consume 'fn', curToken is '('
+		p.nextToken() // curToken is first token of receiver
+
+		recPos := ast.Position{File: p.curToken.File, Line: p.curToken.Line, Col: p.curToken.Col}
+		isMut := false
+		if p.curTokenIs(lexer.MUT) {
+			isMut = true
+			if !p.expectPeek(lexer.IDENT) {
+				return nil
+			}
+		}
+
+		if !p.curTokenIs(lexer.IDENT) {
+			return nil
+		}
+		recName := p.curToken.Literal
+
+		if !p.expectPeek(lexer.COLON) {
+			return nil
+		}
+		p.nextToken() // curToken is type start
+		recType := p.parseType()
+
+		if !p.expectPeek(lexer.RPAREN) {
+			return nil
+		}
+
+		receiver = &ast.Param{
+			Position: recPos,
+			Name:     recName,
+			Mutable:  isMut,
+			Type:     recType,
+		}
+	}
+
 	if !p.expectPeek(lexer.IDENT) {
 		return nil
 	}
@@ -330,6 +367,7 @@ func (p *Parser) parseFuncDecl(exported bool) *ast.FuncDecl {
 	return &ast.FuncDecl{
 		Position:     pos,
 		Exported:     exported,
+		Receiver:     receiver,
 		Name:         name,
 		Lifetimes:    lifetimes,
 		Generics:     generics,
@@ -398,6 +436,9 @@ func (p *Parser) parseStructDecl(exported bool) *ast.StructDecl {
 			return nil
 		}
 		fname := p.curToken.Literal
+		if p.peekTokenIs(lexer.COLON) {
+			p.nextToken()
+		}
 		p.nextToken()
 		ftype := p.parseType()
 		fields = append(fields, ast.StructField{Name: fname, Type: ftype})

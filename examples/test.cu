@@ -1,11 +1,14 @@
+// 04_structs_methods.cu
+struct Point {
+    x: i64
+    y: i64
+}
 
+fn (p: Point) distance() -> i64 {
+    return p.x + p.y
+}
 
 fn main() {
-    // mut x: i64 = 20
-    mut x: f32 = 11.1
-	
-	let y = 200.0
-	if x < y {
-		println("ok")
-	}
+    let pt = Point { x: 3, y: 4 }
+    println(pt.distance())
 }

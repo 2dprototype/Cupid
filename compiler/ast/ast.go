@@ -172,15 +172,16 @@ type ImportSymbol struct {
 }
 
 type FuncDecl struct {
-	Position   Position
-	Exported   bool
-	Name       string
-	Lifetimes  []string
-	Generics   []GenericParam
-	Params     []Param
-	ReturnType Type // nil means no return value
+	Position     Position
+	Exported     bool
+	Receiver     *Param // optional method receiver e.g. (p: Point)
+	Name         string
+	Lifetimes    []string
+	Generics     []GenericParam
+	Params       []Param
+	ReturnType   Type // nil means no return value
 	WhereClauses []WhereClause
-	Body       *BlockStmt
+	Body         *BlockStmt
 }
 func (fd *FuncDecl) Pos() Position { return fd.Position }
 func (fd *FuncDecl) String() string {
@@ -188,7 +189,11 @@ func (fd *FuncDecl) String() string {
 	if fd.Exported {
 		sb.WriteString("export ")
 	}
-	sb.WriteString("fn " + fd.Name)
+	sb.WriteString("fn ")
+	if fd.Receiver != nil {
+		sb.WriteString("(" + fd.Receiver.String() + ") ")
+	}
+	sb.WriteString(fd.Name)
 	if len(fd.Lifetimes) > 0 || len(fd.Generics) > 0 {
 		sb.WriteString("<")
 		parts := []string{}

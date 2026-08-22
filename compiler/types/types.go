@@ -294,6 +294,9 @@ func (tc *TypeChecker) typeCheckDecl(decl ast.Decl, mod *modules.Module) {
 }
 
 func (tc *TypeChecker) typeCheckFuncDecl(fd *ast.FuncDecl, mod *modules.Module) {
+	if fd.Receiver != nil {
+		fd.Receiver.Type = tc.resolveAndValidateType(fd.Receiver.Type, mod)
+	}
 	// Type check parameters
 	for i, p := range fd.Params {
 		fd.Params[i].Type = tc.resolveAndValidateType(p.Type, mod)
@@ -755,10 +758,22 @@ func (tc *TypeChecker) typeCheckCallExpr(ce *ast.CallExpr, mod *modules.Module) 
 					if ptr, ok := targetType.(*ast.PointerType); ok {
 						typeName = ptr.To.String()
 					}
-					// Look up in impl blocks across modules
+					// Look up in receiver functions across modules
 					for _, m := range tc.modules {
 						for _, decl := range m.AST.Decls {
-							if id, ok := decl.(*ast.ImplDecl); ok && id.Target.String() == typeName {
+							if funcDecl, ok := decl.(*ast.FuncDecl); ok && funcDecl.Receiver != nil {
+								recType := funcDecl.Receiver.Type
+								recName := recType.String()
+								if ptr, ok := recType.(*ast.PointerType); ok {
+									recName = ptr.To.String()
+								}
+								if recName == typeName && funcDecl.Name == se.Field {
+									fd = funcDecl
+									tc.resolutions[se] = fd
+									isMethodCall = true
+									break
+								}
+							} else if id, ok := decl.(*ast.ImplDecl); ok && id.Target.String() == typeName {
 								for _, method := range id.Methods {
 									if method.Name == se.Field {
 										fd = method
@@ -805,7 +820,7 @@ func (tc *TypeChecker) typeCheckCallExpr(ce *ast.CallExpr, mod *modules.Module) 
 
 	// Validate arguments
 	paramStart := 0
-	if isMethodCall && len(fd.Params) > 0 && fd.Params[0].Name == "self" {
+	if isMethodCall && fd.Receiver == nil && len(fd.Params) > 0 && fd.Params[0].Name == "self" {
 		paramStart = 1
 	}
 
@@ -1252,6 +1267,18 @@ func (s *Substituter) cloneAndSubstitute(node ast.Node) ast.Node {
 			Target:   s.cloneAndSubstitute(n.Target).(ast.Expr),
 		}
 	case *ast.FuncDecl:
+		var newRec *ast.Param
+		if n.Receiver != nil {
+			clonedRecType := s.cloneAndSubstitute(n.Receiver.Type).(ast.Type)
+			newRec = &ast.Param{
+				Position: n.Receiver.Position,
+				Name:     n.Receiver.Name,
+				Mutable:  n.Receiver.Mutable,
+				Type:     clonedRecType,
+			}
+			s.paramMap[n.Receiver] = newRec
+			s.paramMap[n.Receiver.Type] = clonedRecType
+		}
 		newParams := make([]ast.Param, len(n.Params))
 		for i := range n.Params {
 			p := &n.Params[i]
@@ -1276,6 +1303,7 @@ func (s *Substituter) cloneAndSubstitute(node ast.Node) ast.Node {
 		cloned = &ast.FuncDecl{
 			Position:   n.Position,
 			Exported:   n.Exported,
+			Receiver:   newRec,
 			Name:       n.Name,
 			Params:     newParams,
 			ReturnType: newRet,

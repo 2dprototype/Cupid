@@ -114,7 +114,10 @@ func (bc *BorrowChecker) borrowCheckFunc(fd *ast.FuncDecl, mod *modules.Module) 
 		nestingLevel:    0,
 	}
 
-	// Add parameters to declared variables of block level 0
+	// Add receiver and parameters to declared variables of block level 0
+	if fd.Receiver != nil {
+		env.declaredInBlock[0] = append(env.declaredInBlock[0], fd.Receiver.Name)
+	}
 	for _, p := range fd.Params {
 		env.declaredInBlock[0] = append(env.declaredInBlock[0], p.Name)
 	}

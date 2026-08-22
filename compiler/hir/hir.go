@@ -468,15 +468,33 @@ func (l *Lowerer) lower() *HIRProgram {
 }
 
 func (l *Lowerer) lowerFuncDecl(fd *ast.FuncDecl, prefix string, mod *modules.Module) *HIRFunc {
+	targetStructName := strings.TrimSuffix(prefix, "_")
+	if fd.Receiver != nil {
+		recType := l.convertType(fd.Receiver.Type)
+		if recType != nil {
+			if recType.Kind == TypePointer && recType.ElemType != nil {
+				targetStructName = recType.ElemType.Name
+			} else {
+				targetStructName = recType.Name
+			}
+		}
+		prefix = targetStructName + "_"
+	}
+
 	fnName := prefix + fd.Name
 	retType := l.convertType(fd.ReturnType)
 	if retType == nil {
 		retType = &HIRType{Kind: TypeVoid, Name: "void"}
 	}
 
-	targetStructName := strings.TrimSuffix(prefix, "_")
-
-	params := make([]HIRParam, 0, len(fd.Params))
+	params := make([]HIRParam, 0, len(fd.Params)+1)
+	if fd.Receiver != nil {
+		recType := l.convertType(fd.Receiver.Type)
+		params = append(params, HIRParam{
+			Name: fd.Receiver.Name,
+			Type: recType,
+		})
+	}
 	for _, p := range fd.Params {
 		pType := l.convertType(p.Type)
 		if p.Name == "self" && targetStructName != "" {
@@ -685,23 +703,44 @@ func (l *Lowerer) lowerExpr(expr ast.Expr, mod *modules.Module) HIRExpr {
 		funcName := ""
 		args := make([]HIRExpr, 0, len(e.Args))
 		if sel, ok := e.Function.(*ast.SelectorExpr); ok {
+			target := l.lowerExpr(sel.Target, mod)
+			targetType := target.Type()
+			typeName := ""
+			if targetType != nil {
+				if targetType.Kind == TypePointer && targetType.ElemType != nil {
+					typeName = targetType.ElemType.Name
+				} else {
+					typeName = targetType.Name
+				}
+			}
+
 			if decl, ok := l.resolver.Resolutions[sel]; ok {
 				if fd, isFunc := decl.(*ast.FuncDecl); isFunc {
-					funcName = fd.Name
+					if fd.Receiver != nil {
+						recType := l.convertType(fd.Receiver.Type)
+						if recType != nil {
+							if recType.Kind == TypePointer && recType.ElemType != nil {
+								typeName = recType.ElemType.Name
+							} else {
+								typeName = recType.Name
+							}
+						}
+						funcName = typeName + "_" + fd.Name
+						if recType != nil && recType.Kind == TypePointer && targetType != nil && targetType.Kind != TypePointer {
+							target = &HIRRefExpr{
+								Target:  target,
+								Mutable: recType.Mutable,
+								Typ:     recType,
+							}
+						}
+						args = append(args, target)
+					} else {
+						funcName = fd.Name
+					}
 				} else {
 					funcName = sel.Field
 				}
 			} else {
-				target := l.lowerExpr(sel.Target, mod)
-				targetType := target.Type()
-				typeName := ""
-				if targetType != nil {
-					if targetType.Kind == TypePointer {
-						typeName = targetType.ElemType.Name
-					} else {
-						typeName = targetType.Name
-					}
-				}
 				funcName = typeName + "_" + sel.Field
 				args = append(args, target)
 			}
