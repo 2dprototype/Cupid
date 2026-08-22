@@ -74,6 +74,7 @@ const (
 	FAT_ARROW // =>
 	QUESTION // ?
 	DOT      // .
+	DOTDOT   // ..
 	COLON    // :
 	DOUBLE_COLON // ::
 	COMMA    // ,
@@ -148,6 +149,7 @@ var tokenNames = map[TokenType]string{
 	FAT_ARROW: "=>",
 	QUESTION: "?",
 	DOT:      ".",
+	DOTDOT:   "..",
 	COLON:    ":",
 	DOUBLE_COLON: "::",
 	COMMA:    ",",
@@ -386,8 +388,14 @@ func (l *Lexer) NextToken() Token {
 		tok.Type = QUESTION
 		tok.Literal = "?"
 	case '.':
-		tok.Type = DOT
-		tok.Literal = "."
+		if l.peekChar() == '.' {
+			l.readChar()
+			tok.Type = DOTDOT
+			tok.Literal = ".."
+		} else {
+			tok.Type = DOT
+			tok.Literal = "."
+		}
 	case ':':
 		if l.peekChar() == ':' {
 			l.readChar()

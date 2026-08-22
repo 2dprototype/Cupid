@@ -333,6 +333,14 @@ func (r *Resolver) resolveExpr(expr ast.Expr, mod *modules.Module, scope *Scope)
 	case *ast.IndexExpr:
 		r.resolveExpr(e.Target, mod, scope)
 		r.resolveExpr(e.Index, mod, scope)
+	case *ast.SliceExpr:
+		r.resolveExpr(e.Target, mod, scope)
+		if e.Low != nil {
+			r.resolveExpr(e.Low, mod, scope)
+		}
+		if e.High != nil {
+			r.resolveExpr(e.High, mod, scope)
+		}
 	case *ast.StructInitExpr:
 		r.resolveType(e.Struct, mod, scope)
 		for _, f := range e.Fields {

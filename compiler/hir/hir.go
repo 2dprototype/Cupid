@@ -333,6 +333,16 @@ type HIRIndexExpr struct {
 func (e *HIRIndexExpr) hirExpr()        {}
 func (e *HIRIndexExpr) Type() *HIRType { return e.Typ }
 
+type HIRSliceExpr struct {
+	Target HIRExpr
+	Low    HIRExpr
+	High   HIRExpr
+	Typ    *HIRType
+}
+
+func (e *HIRSliceExpr) hirExpr()        {}
+func (e *HIRSliceExpr) Type() *HIRType { return e.Typ }
+
 type HIRArrayInitExpr struct {
 	Elements []HIRExpr
 	Typ      *HIRType
@@ -775,13 +785,41 @@ func (l *Lowerer) lowerExpr(expr ast.Expr, mod *modules.Module) HIRExpr {
 		target := l.lowerExpr(e.Target, mod)
 		idx := l.lowerExpr(e.Index, mod)
 		var elemType *HIRType
-		if target.Type() != nil && target.Type().ElemType != nil {
-			elemType = target.Type().ElemType
+		if target.Type() != nil {
+			if target.Type().Kind == TypeString {
+				elemType = &HIRType{Kind: TypeU8}
+			} else if target.Type().ElemType != nil {
+				elemType = target.Type().ElemType
+			}
 		}
 		return &HIRIndexExpr{
 			Target: target,
 			Index:  idx,
 			Typ:    elemType,
+		}
+	case *ast.SliceExpr:
+		target := l.lowerExpr(e.Target, mod)
+		var low HIRExpr
+		if e.Low != nil {
+			low = l.lowerExpr(e.Low, mod)
+		}
+		var high HIRExpr
+		if e.High != nil {
+			high = l.lowerExpr(e.High, mod)
+		}
+		sliceType := hirType
+		if sliceType == nil && target.Type() != nil {
+			if target.Type().Kind == TypeString {
+				sliceType = &HIRType{Kind: TypeString}
+			} else if target.Type().Kind == TypeArray {
+				sliceType = &HIRType{Kind: TypeArray, ElemType: target.Type().ElemType, Size: 0}
+			}
+		}
+		return &HIRSliceExpr{
+			Target: target,
+			Low:    low,
+			High:   high,
+			Typ:    sliceType,
 		}
 	case *ast.ArrayLiteralExpr:
 		elements := make([]HIRExpr, 0, len(e.Elements))

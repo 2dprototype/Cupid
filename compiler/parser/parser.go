@@ -1311,9 +1311,34 @@ func (p *Parser) parseCallExpr(function ast.Expr) ast.Expr {
 func (p *Parser) parseIndexExpr(left ast.Expr) ast.Expr {
 	pos := ast.Position{File: p.curToken.File, Line: p.curToken.Line, Col: p.curToken.Col}
 	p.nextToken() // consume '['
-	index := p.parseExpr(LOWEST)
+
+	// Case 1: [:high] or [:] or [..high] or [..]
+	if p.curTokenIs(lexer.COLON) || p.curTokenIs(lexer.DOTDOT) {
+		if p.peekTokenIs(lexer.RBRACKET) {
+			p.nextToken() // consume ']'
+			return &ast.SliceExpr{Position: pos, Target: left, Low: nil, High: nil}
+		}
+		p.nextToken()
+		high := p.parseExpr(LOWEST)
+		p.expectPeek(lexer.RBRACKET)
+		return &ast.SliceExpr{Position: pos, Target: left, Low: nil, High: high}
+	}
+
+	// Case 2: [low], [low:high], [low:], [low..high], [low..]
+	first := p.parseExpr(LOWEST)
+	if p.peekTokenIs(lexer.COLON) || p.peekTokenIs(lexer.DOTDOT) {
+		p.nextToken() // consume ':' or '..'
+		var high ast.Expr
+		if !p.peekTokenIs(lexer.RBRACKET) {
+			p.nextToken()
+			high = p.parseExpr(LOWEST)
+		}
+		p.expectPeek(lexer.RBRACKET)
+		return &ast.SliceExpr{Position: pos, Target: left, Low: first, High: high}
+	}
+
 	p.expectPeek(lexer.RBRACKET)
-	return &ast.IndexExpr{Position: pos, Target: left, Index: index}
+	return &ast.IndexExpr{Position: pos, Target: left, Index: first}
 }
 
 func (p *Parser) parseSelectorExpr(left ast.Expr) ast.Expr {

@@ -434,14 +434,41 @@ func (tc *TypeChecker) TypeCheckExpr(expr ast.Expr, mod *modules.Module) ast.Typ
 	case *ast.IndexExpr:
 		targetType := tc.TypeCheckExpr(e.Target, mod)
 		indexType := tc.TypeCheckExpr(e.Index, mod)
-		if indexType != nil && indexType.String() != "i32" && indexType.String() != "i64" && indexType.String() != "usize" && indexType.String() != "int" {
-			tc.reportError(e.Index.Pos(), fmt.Sprintf("array index must be integer, got %q", indexType.String()), "E404", len(e.Index.String()))
+		if indexType != nil && !isIntegerTypeName(indexType.String()) {
+			tc.reportError(e.Index.Pos(), fmt.Sprintf("index must be integer, got %q", indexType.String()), "E404", len(e.Index.String()))
 		}
 		if targetType != nil {
 			if arr, ok := targetType.(*ast.ArrayType); ok {
 				t = arr.Element
+			} else if prim, ok := targetType.(*ast.PrimitiveType); ok && prim.Name == "string" {
+				t = &ast.PrimitiveType{Position: e.Position, Name: "u8"}
+			} else if ptr, ok := targetType.(*ast.PointerType); ok {
+				t = ptr.To
 			} else {
-				tc.reportError(e.Pos(), fmt.Sprintf("cannot index non-array type %q", targetType.String()), "E405", len(e.Target.String()))
+				tc.reportError(e.Pos(), fmt.Sprintf("cannot index non-indexable type %q", targetType.String()), "E405", len(e.Target.String()))
+			}
+		}
+	case *ast.SliceExpr:
+		targetType := tc.TypeCheckExpr(e.Target, mod)
+		if e.Low != nil {
+			lowType := tc.TypeCheckExpr(e.Low, mod)
+			if lowType != nil && !isIntegerTypeName(lowType.String()) {
+				tc.reportError(e.Low.Pos(), fmt.Sprintf("slice start must be integer, got %q", lowType.String()), "E404", len(e.Low.String()))
+			}
+		}
+		if e.High != nil {
+			highType := tc.TypeCheckExpr(e.High, mod)
+			if highType != nil && !isIntegerTypeName(highType.String()) {
+				tc.reportError(e.High.Pos(), fmt.Sprintf("slice end must be integer, got %q", highType.String()), "E404", len(e.High.String()))
+			}
+		}
+		if targetType != nil {
+			if arr, ok := targetType.(*ast.ArrayType); ok {
+				t = &ast.ArrayType{Position: e.Position, Element: arr.Element, Size: 0}
+			} else if prim, ok := targetType.(*ast.PrimitiveType); ok && prim.Name == "string" {
+				t = &ast.PrimitiveType{Position: e.Position, Name: "string"}
+			} else {
+				tc.reportError(e.Pos(), fmt.Sprintf("cannot slice non-sliceable type %q", targetType.String()), "E405", len(e.Target.String()))
 			}
 		}
 	case *ast.ArrayLiteralExpr:
@@ -1172,6 +1199,21 @@ func (s *Substituter) cloneAndSubstitute(node ast.Node) ast.Node {
 			Target:   s.cloneAndSubstitute(n.Target).(ast.Expr),
 			Index:    s.cloneAndSubstitute(n.Index).(ast.Expr),
 		}
+	case *ast.SliceExpr:
+		var newLow ast.Expr
+		if n.Low != nil {
+			newLow = s.cloneAndSubstitute(n.Low).(ast.Expr)
+		}
+		var newHigh ast.Expr
+		if n.High != nil {
+			newHigh = s.cloneAndSubstitute(n.High).(ast.Expr)
+		}
+		cloned = &ast.SliceExpr{
+			Position: n.Position,
+			Target:   s.cloneAndSubstitute(n.Target).(ast.Expr),
+			Low:      newLow,
+			High:     newHigh,
+		}
 	case *ast.StructInitExpr:
 		newFields := []ast.StructInitField{}
 		for _, f := range n.Fields {
@@ -1280,4 +1322,12 @@ func (s *Substituter) cloneType(t ast.Type) ast.Type {
 		return &ast.ArrayType{Position: n.Position, Element: s.cloneType(n.Element), Size: n.Size}
 	}
 	return t
+}
+
+func isIntegerTypeName(s string) bool {
+	switch s {
+	case "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "int", "uint", "usize", "isize":
+		return true
+	}
+	return false
 }

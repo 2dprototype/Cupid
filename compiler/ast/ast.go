@@ -683,6 +683,26 @@ func (ie *IndexExpr) String() string {
 }
 func (ie *IndexExpr) exprNode() {}
 
+type SliceExpr struct {
+	Position Position
+	Target   Expr
+	Low      Expr // optional (nil if omitted)
+	High     Expr // optional (nil if omitted)
+}
+func (se *SliceExpr) Pos() Position { return se.Position }
+func (se *SliceExpr) String() string {
+	lowStr := ""
+	if se.Low != nil {
+		lowStr = se.Low.String()
+	}
+	highStr := ""
+	if se.High != nil {
+		highStr = se.High.String()
+	}
+	return fmt.Sprintf("%s[%s:%s]", se.Target.String(), lowStr, highStr)
+}
+func (se *SliceExpr) exprNode() {}
+
 type SelectorExpr struct {
 	Position Position
 	Target   Expr

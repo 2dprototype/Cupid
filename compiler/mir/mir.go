@@ -189,6 +189,26 @@ func (r *IndexRvalue) String() string {
 	return fmt.Sprintf("%s[%s]", r.Base.String(), r.Index.String())
 }
 
+type SliceRvalue struct {
+	Base Operand
+	Low  *Operand
+	High *Operand
+	Type *hir.HIRType
+}
+
+func (r *SliceRvalue) rvalue() {}
+func (r *SliceRvalue) String() string {
+	lowStr := ""
+	if r.Low != nil {
+		lowStr = r.Low.String()
+	}
+	highStr := ""
+	if r.High != nil {
+		highStr = r.High.String()
+	}
+	return fmt.Sprintf("slice(%s, %s, %s)", r.Base.String(), lowStr, highStr)
+}
+
 type SetIndexStmt struct {
 	Base  Operand
 	Index Operand
@@ -407,6 +427,12 @@ func (l *MIRLowerer) lowerStmt(stmt hir.HIRStmt, ctx *fnContext) {
 				Base:  baseOp,
 				Index: idxOp,
 				Val:   valOp,
+			})
+		} else if deref, ok := s.Target.(*hir.HIRDerefExpr); ok {
+			ptrOp := l.lowerExpr(deref.Target, ctx)
+			ctx.currBlock.Statements = append(ctx.currBlock.Statements, &StoreStmt{
+				Ptr: ptrOp,
+				Val: valOp,
 			})
 		}
 	case *hir.HIRReturnStmt:
@@ -662,6 +688,29 @@ func (l *MIRLowerer) lowerExpr(expr hir.HIRExpr, ctx *fnContext) Operand {
 				Base:  baseOp,
 				Index: idxOp,
 				Type:  e.Typ,
+			},
+		})
+		return Operand{Kind: OpLocal, LocalID: destLoc.ID, Type: destLoc.Type}
+	case *hir.HIRSliceExpr:
+		baseOp := l.lowerExpr(e.Target, ctx)
+		var lowOp *Operand
+		if e.Low != nil {
+			op := l.lowerExpr(e.Low, ctx)
+			lowOp = &op
+		}
+		var highOp *Operand
+		if e.High != nil {
+			op := l.lowerExpr(e.High, ctx)
+			highOp = &op
+		}
+		destLoc := ctx.mirFn.NewLocal(e.Typ, "tmp_slice")
+		ctx.currBlock.Statements = append(ctx.currBlock.Statements, &AssignStmt{
+			Dest: destLoc,
+			Src: &SliceRvalue{
+				Base: baseOp,
+				Low:  lowOp,
+				High: highOp,
+				Type: e.Typ,
 			},
 		})
 		return Operand{Kind: OpLocal, LocalID: destLoc.ID, Type: destLoc.Type}
