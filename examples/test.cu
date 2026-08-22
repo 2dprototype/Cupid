@@ -1,9 +1,10 @@
 
 
 fn main() {
-    mut x: i32 = 20
-	println(x) //works   
+    // mut x: i64 = 20
+    mut x = 11.1
 	
-	let y: i64 = 20
-	println(y) //error
+	if x < 100 {
+		println("ok")
+	}
 }

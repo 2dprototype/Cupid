@@ -4,6 +4,8 @@ import (
 	"cupid/compiler/hir"
 	"cupid/compiler/mir"
 	"strconv"
+	"strings"
+	"fmt"
 )
 
 type Optimizer struct {
@@ -66,6 +68,39 @@ func (opt *Optimizer) foldConstants(fn *mir.MIRFunction) {
 	}
 }
 
+func parseAnyInteger(s string) (int64, error) {
+	s = strings.ReplaceAll(s, "_", "")
+	if s == "" {
+		return 0, fmt.Errorf("empty string")
+	}
+	neg := false
+	if strings.HasPrefix(s, "-") {
+		neg = true
+		s = s[1:]
+	} else if strings.HasPrefix(s, "+") {
+		s = s[1:]
+	}
+
+	var val uint64
+	var err error
+	if strings.HasPrefix(s, "0x") || strings.HasPrefix(s, "0X") {
+		val, err = strconv.ParseUint(s[2:], 16, 64)
+	} else if strings.HasPrefix(s, "0b") || strings.HasPrefix(s, "0B") {
+		val, err = strconv.ParseUint(s[2:], 2, 64)
+	} else if strings.HasPrefix(s, "0o") || strings.HasPrefix(s, "0O") {
+		val, err = strconv.ParseUint(s[2:], 8, 64)
+	} else {
+		val, err = strconv.ParseUint(s, 10, 64)
+	}
+	if err != nil {
+		return 0, err
+	}
+	if neg {
+		return -int64(val), nil
+	}
+	return int64(val), nil
+}
+
 // evalConstCast folds i64(7), u8(300), bool(0), etc. when the operand is
 // already a literal integer constant, so obviously-constant casts don't
 // cost an instruction at runtime. Float and string casts are left for
@@ -78,7 +113,7 @@ func (opt *Optimizer) evalConstCast(cast *mir.CastRvalue) (string, bool) {
 	if !isConstFoldableIntKind(cast.FromType.Kind) || !isConstFoldableIntKind(cast.ToType.Kind) {
 		return "", false
 	}
-	v, err := strconv.ParseInt(cast.Value.Constant, 10, 64)
+	v, err := parseAnyInteger(cast.Value.Constant)
 	if err != nil {
 		return "", false
 	}
@@ -123,8 +158,55 @@ func truncateToKind(v int64, k hir.HIRTypeKind) string {
 }
 
 func (opt *Optimizer) evalBinaryConst(op string, left string, right string) (string, bool) {
-	lInt, errL := strconv.ParseInt(left, 10, 64)
-	rInt, errR := strconv.ParseInt(right, 10, 64)
+	lFloat, errLF := strconv.ParseFloat(strings.ReplaceAll(left, "_", ""), 64)
+	rFloat, errRF := strconv.ParseFloat(strings.ReplaceAll(right, "_", ""), 64)
+	if errLF == nil && errRF == nil && (strings.Contains(left, ".") || strings.Contains(right, ".") || strings.Contains(left, "e") || strings.Contains(right, "e") || strings.Contains(left, "E") || strings.Contains(right, "E")) {
+		switch op {
+		case "+":
+			return strconv.FormatFloat(lFloat+rFloat, 'g', -1, 64), true
+		case "-":
+			return strconv.FormatFloat(lFloat-rFloat, 'g', -1, 64), true
+		case "*":
+			return strconv.FormatFloat(lFloat*rFloat, 'g', -1, 64), true
+		case "/":
+			if rFloat != 0 {
+				return strconv.FormatFloat(lFloat/rFloat, 'g', -1, 64), true
+			}
+		case "==":
+			if lFloat == rFloat {
+				return "true", true
+			}
+			return "false", true
+		case "!=":
+			if lFloat != rFloat {
+				return "true", true
+			}
+			return "false", true
+		case "<":
+			if lFloat < rFloat {
+				return "true", true
+			}
+			return "false", true
+		case "<=":
+			if lFloat <= rFloat {
+				return "true", true
+			}
+			return "false", true
+		case ">":
+			if lFloat > rFloat {
+				return "true", true
+			}
+			return "false", true
+		case ">=":
+			if lFloat >= rFloat {
+				return "true", true
+			}
+			return "false", true
+		}
+	}
+
+	lInt, errL := parseAnyInteger(left)
+	rInt, errR := parseAnyInteger(right)
 
 	if errL == nil && errR == nil {
 		switch op {

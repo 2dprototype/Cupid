@@ -52,37 +52,112 @@ func isFloatType(t ast.Type) bool {
     return false
 }
 
+func parseAnyInteger(s string) (int64, error) {
+	s = strings.ReplaceAll(s, "_", "")
+	if s == "" {
+		return 0, fmt.Errorf("empty string")
+	}
+	neg := false
+	if strings.HasPrefix(s, "-") {
+		neg = true
+		s = s[1:]
+	} else if strings.HasPrefix(s, "+") {
+		s = s[1:]
+	}
+
+	var val uint64
+	var err error
+	if strings.HasPrefix(s, "0x") || strings.HasPrefix(s, "0X") {
+		val, err = strconv.ParseUint(s[2:], 16, 64)
+	} else if strings.HasPrefix(s, "0b") || strings.HasPrefix(s, "0B") {
+		val, err = strconv.ParseUint(s[2:], 2, 64)
+	} else if strings.HasPrefix(s, "0o") || strings.HasPrefix(s, "0O") {
+		val, err = strconv.ParseUint(s[2:], 8, 64)
+	} else {
+		val, err = strconv.ParseUint(s, 10, 64)
+	}
+	if err != nil {
+		return 0, err
+	}
+	if neg {
+		return -int64(val), nil
+	}
+	return int64(val), nil
+}
+
 // literalFitsInType checks whether a literal integer or float can be assigned to target type.
 // For integers, it verifies the value is within the target range.
 // For floats, any finite literal is accepted (precision loss for f32 is allowed).
 func literalFitsInType(lit *ast.LiteralExpr, target ast.Type) bool {
-    if lit.Type == lexer.INT {
-        val, err := strconv.ParseInt(lit.Value, 10, 64)
-        if err != nil {
-            return false
-        }
-        if prim, ok := target.(*ast.PrimitiveType); ok {
-            name := canonicalTypeName(prim.Name)
-            switch name {
-            case "i8":  return val >= -128 && val <= 127
-            case "i16": return val >= -32768 && val <= 32767
-            case "i32": return val >= -2147483648 && val <= 2147483647
-            case "i64": return true // all signed 64-bit values fit
-            case "u8":  return val >= 0 && val <= 255
-            case "u16": return val >= 0 && val <= 65535
-            case "u32": return val >= 0 && val <= 4294967295
-            case "u64": return val >= 0 // all non-negative values fit
-            }
-        }
-        return false
-    }
-    if lit.Type == lexer.FLOAT {
-        // Any finite float can be assigned to f32 or f64; we don't check overflow.
-        return isFloatType(target)
-    }
-    return false
+	if lit.Type == lexer.INT {
+		val, err := parseAnyInteger(lit.Value)
+		if err != nil {
+			return false
+		}
+		if prim, ok := target.(*ast.PrimitiveType); ok {
+			name := canonicalTypeName(prim.Name)
+			switch name {
+			case "i8":
+				return val >= -128 && val <= 127
+			case "i16":
+				return val >= -32768 && val <= 32767
+			case "i32":
+				return val >= -2147483648 && val <= 2147483647
+			case "i64":
+				return true
+			case "u8":
+				return val >= 0 && val <= 255
+			case "u16":
+				return val >= 0 && val <= 65535
+			case "u32":
+				return val >= 0 && val <= 4294967295
+			case "u64":
+				return val >= 0
+			case "f32", "f64":
+				return true
+			}
+		}
+		return false
+	}
+	if lit.Type == lexer.FLOAT {
+		return isFloatType(target)
+	}
+	return false
 }
 
+func (tc *TypeChecker) checkAssignable(expectedType ast.Type, expr ast.Expr, valType ast.Type) bool {
+	if tc.TypesEqual(expectedType, valType) {
+		return true
+	}
+	var lit *ast.LiteralExpr
+	var isNegative bool
+	if l, ok := expr.(*ast.LiteralExpr); ok {
+		lit = l
+	} else if u, ok := expr.(*ast.UnaryExpr); ok && (u.Op == lexer.SUB || u.Op == lexer.ADD) {
+		if l, ok := u.Right.(*ast.LiteralExpr); ok {
+			lit = l
+			if u.Op == lexer.SUB {
+				isNegative = true
+			}
+		}
+	}
+	if lit != nil && (lit.Type == lexer.INT || lit.Type == lexer.FLOAT) {
+		testLit := lit
+		if isNegative && !strings.HasPrefix(lit.Value, "-") {
+			testLit = &ast.LiteralExpr{
+				Position: lit.Position,
+				Type:     lit.Type,
+				Value:    "-" + lit.Value,
+			}
+		}
+		if literalFitsInType(testLit, expectedType) {
+			tc.ExprTypes[expr] = expectedType
+			tc.ExprTypes[lit] = expectedType
+			return true
+		}
+	}
+	return false
+}
 
 func isIntType(name string) bool {
 	switch name {
@@ -95,9 +170,9 @@ func isIntType(name string) bool {
 func canonicalTypeName(name string) string {
 	switch name {
 	case "int":
-		return "i32"
+		return "i64"
 	case "uint":
-		return "u32"
+		return "u64"
 	case "usize":
 		return "u64"
 	case "isize":
@@ -211,7 +286,7 @@ func (tc *TypeChecker) typeCheckDecl(decl ast.Decl, mod *modules.Module) {
 		}
 		valType := tc.TypeCheckExpr(d.Value, mod)
 		if expectedType != nil && valType != nil {
-			if !tc.TypesEqual(expectedType, valType) {
+			if !tc.checkAssignable(expectedType, d.Value, valType) {
 				tc.reportError(d.Pos(), fmt.Sprintf("type mismatch in global constant %q: expected %q, got %q", d.Name, expectedType.String(), valType.String()), "E401", len(d.Name))
 			}
 		}
@@ -265,60 +340,34 @@ func (tc *TypeChecker) typeCheckStmt(stmt ast.Stmt, expectedRet ast.Type, mod *m
 			}
 
 			// Main type equality check with implicit literal conversion
-			if !tc.TypesEqual(expectedType, valType) {
-				// Try to convert if the RHS is a literal integer or float
-				if lit, ok := s.Value.(*ast.LiteralExpr); ok && (lit.Type == lexer.INT || lit.Type == lexer.FLOAT) {
-					if literalFitsInType(lit, expectedType) {
-						// Accept the binding – update the expression type to the expected type
-						tc.ExprTypes[s.Value] = expectedType
-						// Now we consider it type‑correct; no error reported
-					} else {
-						tc.reportError(s.Pos(),
-							fmt.Sprintf("literal %q does not fit in type %q", lit.Value, expectedType.String()),
-							"E401", len(s.Name))
-					}
-				} else {
-					// No implicit conversion possible – report mismatch
-					tc.reportError(s.Pos(),
-						fmt.Sprintf("type mismatch in variable binding %q: expected %q, got %q",
-							s.Name, expectedType.String(), valType.String()),
-						"E401", len(s.Name))
-				}
+			if !tc.checkAssignable(expectedType, s.Value, valType) {
+				tc.reportError(s.Pos(),
+					fmt.Sprintf("type mismatch in variable binding %q: expected %q, got %q",
+						s.Name, expectedType.String(), valType.String()),
+					"E401", len(s.Name))
 			}
 		}
-case *ast.ConstStmt:
-    var expectedType ast.Type
-    if s.Type != nil {
-        s.Type = tc.resolveAndValidateType(s.Type, mod)
-        expectedType = s.Type
-    }
-    valType := tc.TypeCheckExpr(s.Value, mod)
-    if expectedType != nil && valType != nil {
-        // Main type equality check with implicit literal conversion
-        if !tc.TypesEqual(expectedType, valType) {
-            if lit, ok := s.Value.(*ast.LiteralExpr); ok && (lit.Type == lexer.INT || lit.Type == lexer.FLOAT) {
-                if literalFitsInType(lit, expectedType) {
-                    // Accept the binding – update the expression type to the expected type
-                    tc.ExprTypes[s.Value] = expectedType
-                } else {
-                    tc.reportError(s.Pos(),
-                        fmt.Sprintf("literal %q does not fit in type %q", lit.Value, expectedType.String()),
-                        "E401", len(s.Name))
-                }
-            } else {
-                tc.reportError(s.Pos(),
-                    fmt.Sprintf("type mismatch in constant binding %q: expected %q, got %q",
-                        s.Name, expectedType.String(), valType.String()),
-                    "E401", len(s.Name))
-            }
-        }
-    }
+	case *ast.ConstStmt:
+		var expectedType ast.Type
+		if s.Type != nil {
+			s.Type = tc.resolveAndValidateType(s.Type, mod)
+			expectedType = s.Type
+		}
+		valType := tc.TypeCheckExpr(s.Value, mod)
+		if expectedType != nil && valType != nil {
+			if !tc.checkAssignable(expectedType, s.Value, valType) {
+				tc.reportError(s.Pos(),
+					fmt.Sprintf("type mismatch in constant binding %q: expected %q, got %q",
+						s.Name, expectedType.String(), valType.String()),
+					"E401", len(s.Name))
+			}
+		}
 	case *ast.ReturnStmt:
 		var actualRet ast.Type = &ast.PrimitiveType{Position: s.Pos(), Name: "void"}
 		if s.Value != nil {
 			actualRet = tc.TypeCheckExpr(s.Value, mod)
 		}
-		if actualRet != nil && !tc.TypesEqual(expectedRet, actualRet) {
+		if actualRet != nil && !tc.checkAssignable(expectedRet, s.Value, actualRet) {
 			tc.reportError(s.Pos(), fmt.Sprintf("type mismatch in return statement: expected %q, got %q", expectedRet.String(), actualRet.String()), "E401", 6)
 		}
 	case *ast.ExprStmt:
@@ -483,7 +532,7 @@ func (tc *TypeChecker) typeCheckIdentExpr(ie *ast.IdentExpr, mod *modules.Module
 func (tc *TypeChecker) typeCheckLiteralExpr(le *ast.LiteralExpr) ast.Type {
 	switch le.Type {
 	case lexer.INT:
-		return &ast.PrimitiveType{Position: le.Position, Name: "i32"}
+		return &ast.PrimitiveType{Position: le.Position, Name: "i64"}
 	case lexer.FLOAT:
 		return &ast.PrimitiveType{Position: le.Position, Name: "f64"}
 	case lexer.STRING:
@@ -503,8 +552,14 @@ func (tc *TypeChecker) typeCheckBinaryExpr(be *ast.BinaryExpr, mod *modules.Modu
 	}
 
 	if !tc.TypesEqual(leftType, rightType) {
-		tc.reportError(be.Pos(), fmt.Sprintf("type mismatch in binary expression: left has %q, right has %q", leftType.String(), rightType.String()), "E401", len(be.Op.String()))
-		return nil
+		if tc.checkAssignable(leftType, be.Right, rightType) {
+			rightType = leftType
+		} else if be.Op != lexer.ASSIGN && tc.checkAssignable(rightType, be.Left, leftType) {
+			leftType = rightType
+		} else {
+			tc.reportError(be.Pos(), fmt.Sprintf("type mismatch in binary expression: left has %q, right has %q", leftType.String(), rightType.String()), "E401", len(be.Op.String()))
+			return nil
+		}
 	}
 
 	switch be.Op {
@@ -734,7 +789,7 @@ func (tc *TypeChecker) typeCheckCallExpr(ce *ast.CallExpr, mod *modules.Module) 
 	for i, arg := range ce.Args {
 		paramType := fd.Params[i+paramStart].Type
 		argType := tc.TypeCheckExpr(arg, mod)
-		if argType != nil && !tc.TypesEqual(paramType, argType) {
+		if argType != nil && !tc.checkAssignable(paramType, arg, argType) {
 			tc.reportError(arg.Pos(), fmt.Sprintf("argument type mismatch: expected %q, got %q", paramType.String(), argType.String()), "E401", len(arg.String()))
 		}
 	}
@@ -787,7 +842,7 @@ func (tc *TypeChecker) typeCheckStructInitExpr(se *ast.StructInitExpr, mod *modu
 			continue
 		}
 		valType := tc.TypeCheckExpr(f.Value, mod)
-		if valType != nil && !tc.TypesEqual(expectedType, valType) {
+		if valType != nil && !tc.checkAssignable(expectedType, f.Value, valType) {
 			tc.reportError(f.Value.Pos(), fmt.Sprintf("field %q type mismatch: expected %q, got %q", f.Name, expectedType.String(), valType.String()), "E401", len(f.Value.String()))
 		}
 	}

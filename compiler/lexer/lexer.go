@@ -241,6 +241,14 @@ func (l *Lexer) peekChar() rune {
 	return l.input[l.readPos]
 }
 
+func (l *Lexer) peekNChar(n int) rune {
+	idx := l.readPos + n - 1
+	if idx >= len(l.input) || idx < 0 {
+		return 0
+	}
+	return l.input[idx]
+}
+
 func (l *Lexer) NextToken() Token {
 	l.skipWhitespaceAndComments()
 
@@ -502,17 +510,69 @@ func (l *Lexer) readIdentifier() string {
 	return string(l.input[startPos:l.pos])
 }
 
+func isHexDigit(ch rune) bool {
+	return (ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f') || (ch >= 'A' && ch <= 'F')
+}
+
+func isBinaryDigit(ch rune) bool {
+	return ch == '0' || ch == '1'
+}
+
+func isOctalDigit(ch rune) bool {
+	return ch >= '0' && ch <= '7'
+}
+
 func (l *Lexer) readNumber() (string, bool) {
 	startPos := l.pos
 	isFloat := false
-	for isDigit(l.ch) {
+
+	if l.ch == '0' {
+		peek := l.peekChar()
+		if peek == 'x' || peek == 'X' {
+			l.readChar() // consume '0'
+			l.readChar() // consume 'x'/'X'
+			for isHexDigit(l.ch) || l.ch == '_' {
+				l.readChar()
+			}
+			return string(l.input[startPos:l.pos]), false
+		} else if peek == 'b' || peek == 'B' {
+			l.readChar() // consume '0'
+			l.readChar() // consume 'b'/'B'
+			for isBinaryDigit(l.ch) || l.ch == '_' {
+				l.readChar()
+			}
+			return string(l.input[startPos:l.pos]), false
+		} else if peek == 'o' || peek == 'O' {
+			l.readChar() // consume '0'
+			l.readChar() // consume 'o'/'O'
+			for isOctalDigit(l.ch) || l.ch == '_' {
+				l.readChar()
+			}
+			return string(l.input[startPos:l.pos]), false
+		}
+	}
+
+	for isDigit(l.ch) || l.ch == '_' {
 		l.readChar()
 	}
 	if l.ch == '.' && isDigit(l.peekChar()) {
 		isFloat = true
 		l.readChar() // consume '.'
-		for isDigit(l.ch) {
+		for isDigit(l.ch) || l.ch == '_' {
 			l.readChar()
+		}
+	}
+	if l.ch == 'e' || l.ch == 'E' {
+		peek := l.peekChar()
+		if isDigit(peek) || ((peek == '+' || peek == '-') && isDigit(l.peekNChar(2))) {
+			isFloat = true
+			l.readChar() // consume 'e'/'E'
+			if l.ch == '+' || l.ch == '-' {
+				l.readChar()
+			}
+			for isDigit(l.ch) || l.ch == '_' {
+				l.readChar()
+			}
 		}
 	}
 	return string(l.input[startPos:l.pos]), isFloat

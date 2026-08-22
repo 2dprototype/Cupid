@@ -356,7 +356,112 @@ func (b *Backend) generateStatement(stmt mir.Statement, fn *mir.MIRFunction, off
 	}
 }
 
+func parseAnyInteger(s string) (int64, error) {
+	s = strings.ReplaceAll(s, "_", "")
+	if s == "" {
+		return 0, fmt.Errorf("empty string")
+	}
+	neg := false
+	if strings.HasPrefix(s, "-") {
+		neg = true
+		s = s[1:]
+	} else if strings.HasPrefix(s, "+") {
+		s = s[1:]
+	}
+
+	var val uint64
+	var err error
+	if strings.HasPrefix(s, "0x") || strings.HasPrefix(s, "0X") {
+		val, err = strconv.ParseUint(s[2:], 16, 64)
+	} else if strings.HasPrefix(s, "0b") || strings.HasPrefix(s, "0B") {
+		val, err = strconv.ParseUint(s[2:], 2, 64)
+	} else if strings.HasPrefix(s, "0o") || strings.HasPrefix(s, "0O") {
+		val, err = strconv.ParseUint(s[2:], 8, 64)
+	} else {
+		val, err = strconv.ParseUint(s, 10, 64)
+	}
+	if err != nil {
+		return 0, err
+	}
+	if neg {
+		return -int64(val), nil
+	}
+	return int64(val), nil
+}
+
 func (b *Backend) generateBinary(bin *mir.BinaryRvalue, destOffset int, offsets map[int]int, out *bytes.Buffer) {
+	isFloat := (bin.Left.Type != nil && isFloatKind(bin.Left.Type.Kind)) ||
+		(bin.Right.Type != nil && isFloatKind(bin.Right.Type.Kind)) ||
+		(bin.Type != nil && isFloatKind(bin.Type.Kind))
+
+	if isFloat {
+		fKind := hir.TypeF64
+		if (bin.Left.Type != nil && bin.Left.Type.Kind == hir.TypeF32) ||
+			(bin.Right.Type != nil && bin.Right.Type.Kind == hir.TypeF32) ||
+			(bin.Type != nil && bin.Type.Kind == hir.TypeF32) {
+			fKind = hir.TypeF32
+		}
+
+		b.loadOperandToXMM(bin.Left, "xmm0", fKind, offsets, out)
+		b.loadOperandToXMM(bin.Right, "xmm1", fKind, offsets, out)
+
+		switch bin.Op {
+		case "+":
+			if fKind == hir.TypeF32 {
+				out.WriteString("    addss xmm0, xmm1\n")
+			} else {
+				out.WriteString("    addsd xmm0, xmm1\n")
+			}
+			b.storeXMMToLocal("xmm0", fKind, destOffset, out)
+		case "-":
+			if fKind == hir.TypeF32 {
+				out.WriteString("    subss xmm0, xmm1\n")
+			} else {
+				out.WriteString("    subsd xmm0, xmm1\n")
+			}
+			b.storeXMMToLocal("xmm0", fKind, destOffset, out)
+		case "*":
+			if fKind == hir.TypeF32 {
+				out.WriteString("    mulss xmm0, xmm1\n")
+			} else {
+				out.WriteString("    mulsd xmm0, xmm1\n")
+			}
+			b.storeXMMToLocal("xmm0", fKind, destOffset, out)
+		case "/":
+			if fKind == hir.TypeF32 {
+				out.WriteString("    divss xmm0, xmm1\n")
+			} else {
+				out.WriteString("    divsd xmm0, xmm1\n")
+			}
+			b.storeXMMToLocal("xmm0", fKind, destOffset, out)
+		case "==", "!=", "<", "<=", ">", ">=":
+			if fKind == hir.TypeF32 {
+				out.WriteString("    ucomiss xmm0, xmm1\n")
+			} else {
+				out.WriteString("    ucomisd xmm0, xmm1\n")
+			}
+			setInstr := ""
+			switch bin.Op {
+			case "==":
+				setInstr = "sete"
+			case "!=":
+				setInstr = "setne"
+			case "<":
+				setInstr = "setb"
+			case "<=":
+				setInstr = "setbe"
+			case ">":
+				setInstr = "seta"
+			case ">=":
+				setInstr = "setae"
+			}
+			out.WriteString(fmt.Sprintf("    %s al\n", setInstr))
+			out.WriteString("    movzx rax, al\n")
+			out.WriteString(fmt.Sprintf("    mov [rbp - %d], rax\n", destOffset))
+		}
+		return
+	}
+
 	b.loadOperandToReg(bin.Left, "rax", offsets, out)
 	b.loadOperandToReg(bin.Right, "rcx", offsets, out)
 
@@ -413,6 +518,32 @@ func (b *Backend) generateBinary(bin *mir.BinaryRvalue, destOffset int, offsets 
 }
 
 func (b *Backend) generateUnary(un *mir.UnaryRvalue, destOffset int, offsets map[int]int, out *bytes.Buffer) {
+	isFloat := (un.Right.Type != nil && isFloatKind(un.Right.Type.Kind)) ||
+		(un.Type != nil && isFloatKind(un.Type.Kind))
+
+	if isFloat {
+		fKind := hir.TypeF64
+		if (un.Right.Type != nil && un.Right.Type.Kind == hir.TypeF32) ||
+			(un.Type != nil && un.Type.Kind == hir.TypeF32) {
+			fKind = hir.TypeF32
+		}
+
+		b.loadOperandToXMM(un.Right, "xmm0", fKind, offsets, out)
+		if un.Op == "-" {
+			if fKind == hir.TypeF32 {
+				out.WriteString("    xorps xmm1, xmm1\n")
+				out.WriteString("    subss xmm1, xmm0\n")
+				out.WriteString("    movaps xmm0, xmm1\n")
+			} else {
+				out.WriteString("    xorpd xmm1, xmm1\n")
+				out.WriteString("    subsd xmm1, xmm0\n")
+				out.WriteString("    movapd xmm0, xmm1\n")
+			}
+			b.storeXMMToLocal("xmm0", fKind, destOffset, out)
+		}
+		return
+	}
+
 	b.loadOperandToReg(un.Right, "rax", offsets, out)
 	switch un.Op {
 	case "-":
@@ -444,6 +575,12 @@ func (b *Backend) generateCall(call *mir.CallRvalue, destOffset int, offsets map
 			} else if arg.Type != nil && arg.Type.Kind == hir.TypeBool {
 				b.loadOperandToReg(arg, "rcx", offsets, out)
 				out.WriteString("    call _cupid_print_bool\n")
+			} else if arg.Type != nil && isFloatKind(arg.Type.Kind) {
+				b.loadOperandToXMM(arg, "xmm0", arg.Type.Kind, offsets, out)
+				if arg.Type.Kind == hir.TypeF32 {
+					out.WriteString("    cvtss2sd xmm0, xmm0\n")
+				}
+				out.WriteString("    call _cupid_print_f64\n")
 			} else {
 				b.loadOperandToReg(arg, "rcx", offsets, out)
 				out.WriteString("    call _cupid_print_i64\n")
@@ -459,7 +596,15 @@ func (b *Backend) generateCall(call *mir.CallRvalue, destOffset int, offsets map
 	paramRegs := []string{"rcx", "rdx", "r8", "r9"}
 	for i, arg := range call.Args {
 		if i < len(paramRegs) {
-			if arg.Type != nil && (arg.Type.Kind == hir.TypeStruct || arg.Type.Kind == hir.TypeArray) && arg.Type.ByteSize() > 8 && arg.Kind == mir.OpLocal {
+			if arg.Type != nil && isFloatKind(arg.Type.Kind) {
+				xmmReg := fmt.Sprintf("xmm%d", i)
+				b.loadOperandToXMM(arg, xmmReg, arg.Type.Kind, offsets, out)
+				if arg.Type.Kind == hir.TypeF32 {
+					out.WriteString(fmt.Sprintf("    movd %s, %s\n", paramRegs[i], xmmReg))
+				} else {
+					out.WriteString(fmt.Sprintf("    movq %s, %s\n", paramRegs[i], xmmReg))
+				}
+			} else if arg.Type != nil && (arg.Type.Kind == hir.TypeStruct || arg.Type.Kind == hir.TypeArray) && arg.Type.ByteSize() > 8 && arg.Kind == mir.OpLocal {
 				argOffset := offsets[arg.LocalID]
 				out.WriteString(fmt.Sprintf("    lea %s, [rbp - %d]\n", paramRegs[i], argOffset))
 			} else {
@@ -474,7 +619,9 @@ func (b *Backend) generateCall(call *mir.CallRvalue, destOffset int, offsets map
 
 	targetName := b.functionLabel(call.FuncName)
 	out.WriteString(fmt.Sprintf("    call %s\n", targetName))
-	if call.Type != nil && (call.Type.Kind == hir.TypeStruct || call.Type.Kind == hir.TypeArray) && call.Type.ByteSize() > 8 {
+	if call.Type != nil && isFloatKind(call.Type.Kind) {
+		b.storeXMMToLocal("xmm0", call.Type.Kind, destOffset, out)
+	} else if call.Type != nil && (call.Type.Kind == hir.TypeStruct || call.Type.Kind == hir.TypeArray) && call.Type.ByteSize() > 8 {
 		numWords := (call.Type.ByteSize() + 7) / 8
 		for w := 0; w < numWords; w++ {
 			out.WriteString(fmt.Sprintf("    mov rcx, [rax + %d]\n", w*8))
@@ -490,7 +637,14 @@ func (b *Backend) generateTerminator(term mir.Terminator, fn *mir.MIRFunction, o
 	switch t := term.(type) {
 	case *mir.ReturnTerminator:
 		if t.Value != nil {
-			if fn.ReturnType != nil && (fn.ReturnType.Kind == hir.TypeStruct || fn.ReturnType.Kind == hir.TypeArray) && fn.ReturnType.ByteSize() > 8 && t.Value.Kind == mir.OpLocal {
+			if fn.ReturnType != nil && isFloatKind(fn.ReturnType.Kind) {
+				b.loadOperandToXMM(*t.Value, "xmm0", fn.ReturnType.Kind, offsets, out)
+				if fn.ReturnType.Kind == hir.TypeF32 {
+					out.WriteString("    movd rax, xmm0\n")
+				} else {
+					out.WriteString("    movq rax, xmm0\n")
+				}
+			} else if fn.ReturnType != nil && (fn.ReturnType.Kind == hir.TypeStruct || fn.ReturnType.Kind == hir.TypeArray) && fn.ReturnType.ByteSize() > 8 && t.Value.Kind == mir.OpLocal {
 				valOffset := offsets[t.Value.LocalID]
 				out.WriteString(fmt.Sprintf("    lea rax, [rbp - %d]\n", valOffset))
 			} else {
@@ -527,13 +681,29 @@ func (b *Backend) loadOperandToReg(op mir.Operand, reg string, offsets map[int]i
 			out.WriteString(fmt.Sprintf("    mov %s, 1\n", reg))
 		} else if val == "false" {
 			out.WriteString(fmt.Sprintf("    mov %s, 0\n", reg))
-		} else {
-			if _, err := strconv.ParseInt(val, 10, 64); err == nil {
-				out.WriteString(fmt.Sprintf("    mov %s, %s\n", reg, val))
-			} else {
-				// Global or symbol reference
-				out.WriteString(fmt.Sprintf("    mov %s, [global_%s]\n", reg, val))
+		} else if op.Type != nil && isFloatKind(op.Type.Kind) {
+			cleanVal := strings.ReplaceAll(val, "_", "")
+			f, err := strconv.ParseFloat(cleanVal, 64)
+			if err != nil {
+				if intVal, err2 := parseAnyInteger(val); err2 == nil {
+					f = float64(intVal)
+				}
 			}
+			if op.Type.Kind == hir.TypeF32 {
+				bits := math.Float32bits(float32(f))
+				out.WriteString(fmt.Sprintf("    mov %s, %d\n", reg, bits))
+			} else {
+				bits := math.Float64bits(f)
+				out.WriteString(fmt.Sprintf("    mov %s, %d\n", reg, bits))
+			}
+		} else if f, err := strconv.ParseFloat(strings.ReplaceAll(val, "_", ""), 64); err == nil && (strings.Contains(val, ".") || strings.Contains(val, "e") || strings.Contains(val, "E")) {
+			bits := math.Float64bits(f)
+			out.WriteString(fmt.Sprintf("    mov %s, %d\n", reg, bits))
+		} else if intVal, err := parseAnyInteger(val); err == nil {
+			out.WriteString(fmt.Sprintf("    mov %s, %d\n", reg, intVal))
+		} else {
+			// Global or symbol reference
+			out.WriteString(fmt.Sprintf("    mov %s, [global_%s]\n", reg, val))
 		}
 	}
 }
@@ -656,9 +826,14 @@ func (b *Backend) loadOperandToXMM(op mir.Operand, xmmReg string, kind hir.HIRTy
 		return
 	}
 
-	f, err := strconv.ParseFloat(op.Constant, 64)
+	cleanVal := strings.ReplaceAll(op.Constant, "_", "")
+	f, err := strconv.ParseFloat(cleanVal, 64)
 	if err != nil {
-		f = 0
+		if intVal, err2 := parseAnyInteger(op.Constant); err2 == nil {
+			f = float64(intVal)
+		} else {
+			f = 0
+		}
 	}
 	if kind == hir.TypeF32 {
 		bits := math.Float32bits(float32(f))
@@ -791,6 +966,20 @@ func (b *Backend) emitRuntimeHelpers(out *bytes.Buffer) {
 	out.WriteString("    sub rsp, 48\n")
 	out.WriteString("    mov rdx, rcx\n")
 	out.WriteString("    lea rcx, [_cupid_fmt_i64]\n")
+	out.WriteString("    call [printf]\n")
+	out.WriteString("    mov rsp, rbp\n")
+	out.WriteString("    pop rbp\n")
+	out.WriteString("    ret\n\n")
+
+	// _cupid_print_f64: XMM0 contains double
+	out.WriteString("_cupid_print_f64:\n")
+	out.WriteString("    push rbp\n")
+	out.WriteString("    mov rbp, rsp\n")
+	out.WriteString("    sub rsp, 48\n")
+	out.WriteString("    movsd [rbp - 8], xmm0\n")
+	out.WriteString("    movsd xmm1, [rbp - 8]\n")
+	out.WriteString("    movq rdx, xmm1\n")
+	out.WriteString("    lea rcx, [_cupid_fmt_f64]\n")
 	out.WriteString("    call [printf]\n")
 	out.WriteString("    mov rsp, rbp\n")
 	out.WriteString("    pop rbp\n")
