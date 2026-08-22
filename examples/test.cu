@@ -2,9 +2,10 @@
 
 fn main() {
     // mut x: i64 = 20
-    mut x = 11.1
+    mut x: f32 = 11.1
 	
-	if x < 100 {
+	let y = 200.0
+	if x < y {
 		println("ok")
 	}
 }

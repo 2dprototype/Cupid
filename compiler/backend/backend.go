@@ -293,23 +293,65 @@ func (b *Backend) generateStatement(stmt mir.Statement, fn *mir.MIRFunction, off
 		case *mir.CallRvalue:
 			b.generateCall(src, destOffset, offsets, out)
 		case *mir.FieldAccessRvalue:
+			fKind := hir.TypeI64
+			if src.Type != nil {
+				fKind = src.Type.Kind
+			}
+			addr := ""
 			if src.Base.Kind == mir.OpLocal && src.Base.Type != nil && src.Base.Type.Kind == hir.TypeStruct {
 				baseOffset := offsets[src.Base.LocalID]
-				out.WriteString(fmt.Sprintf("    mov rcx, [rbp - %d + %d]\n", baseOffset, src.Offset))
+				addr = fmt.Sprintf("[rbp - %d + %d]", baseOffset, src.Offset)
 			} else {
 				b.loadOperandToReg(src.Base, "rax", offsets, out)
-				out.WriteString(fmt.Sprintf("    mov rcx, [rax + %d]\n", src.Offset))
+				addr = fmt.Sprintf("[rax + %d]", src.Offset)
+			}
+
+			switch fKind {
+			case hir.TypeBool, hir.TypeU8:
+				out.WriteString(fmt.Sprintf("    movzx rcx, byte %s\n", addr))
+			case hir.TypeI8:
+				out.WriteString(fmt.Sprintf("    movsx rcx, byte %s\n", addr))
+			case hir.TypeU16:
+				out.WriteString(fmt.Sprintf("    movzx rcx, word %s\n", addr))
+			case hir.TypeI16:
+				out.WriteString(fmt.Sprintf("    movsx rcx, word %s\n", addr))
+			case hir.TypeU32, hir.TypeChar, hir.TypeF32:
+				out.WriteString(fmt.Sprintf("    mov ecx, dword %s\n", addr))
+			case hir.TypeI32:
+				out.WriteString(fmt.Sprintf("    movsxd rcx, dword %s\n", addr))
+			default:
+				out.WriteString(fmt.Sprintf("    mov rcx, qword %s\n", addr))
 			}
 			out.WriteString(fmt.Sprintf("    mov [rbp - %d], rcx\n", destOffset))
 		case *mir.IndexRvalue:
 			b.loadOperandToReg(src.Index, "rcx", offsets, out)
-			out.WriteString("    shl rcx, 3\n")
+			b.emitElemScaledIndex("rcx", src.Type, out)
 			if src.Base.Kind == mir.OpLocal {
 				baseOffset := offsets[src.Base.LocalID]
 				out.WriteString(fmt.Sprintf("    mov rax, rbp\n"))
 				out.WriteString(fmt.Sprintf("    sub rax, %d\n", baseOffset))
 				out.WriteString("    add rax, rcx\n")
-				out.WriteString("    mov rdx, [rax]\n")
+
+				fKind := hir.TypeI64
+				if src.Type != nil {
+					fKind = src.Type.Kind
+				}
+				switch fKind {
+				case hir.TypeBool, hir.TypeU8:
+					out.WriteString("    movzx rdx, byte [rax]\n")
+				case hir.TypeI8:
+					out.WriteString("    movsx rdx, byte [rax]\n")
+				case hir.TypeU16:
+					out.WriteString("    movzx rdx, word [rax]\n")
+				case hir.TypeI16:
+					out.WriteString("    movsx rdx, word [rax]\n")
+				case hir.TypeU32, hir.TypeChar, hir.TypeF32:
+					out.WriteString("    mov edx, dword [rax]\n")
+				case hir.TypeI32:
+					out.WriteString("    movsxd rdx, dword [rax]\n")
+				default:
+					out.WriteString("    mov rdx, [rax]\n")
+				}
 				out.WriteString(fmt.Sprintf("    mov [rbp - %d], rdx\n", destOffset))
 			}
 		case *mir.RefRvalue:
@@ -333,26 +375,75 @@ func (b *Backend) generateStatement(stmt mir.Statement, fn *mir.MIRFunction, off
 		out.WriteString("    mov [rax], rcx\n")
 	case *mir.SetFieldStmt:
 		b.loadOperandToReg(s.Val, "rcx", offsets, out)
+		addr := ""
 		if s.Base.Kind == mir.OpLocal && s.Base.Type != nil && s.Base.Type.Kind == hir.TypeStruct {
 			baseOffset := offsets[s.Base.LocalID]
-			out.WriteString(fmt.Sprintf("    mov [rbp - %d + %d], rcx\n", baseOffset, s.Offset))
+			addr = fmt.Sprintf("[rbp - %d + %d]", baseOffset, s.Offset)
 		} else {
 			b.loadOperandToReg(s.Base, "rax", offsets, out)
-			out.WriteString(fmt.Sprintf("    mov [rax + %d], rcx\n", s.Offset))
+			addr = fmt.Sprintf("[rax + %d]", s.Offset)
+		}
+
+		fKind := hir.TypeI64
+		if s.Val.Type != nil {
+			fKind = s.Val.Type.Kind
+		}
+		switch fKind {
+		case hir.TypeBool, hir.TypeI8, hir.TypeU8:
+			out.WriteString(fmt.Sprintf("    mov byte %s, cl\n", addr))
+		case hir.TypeI16, hir.TypeU16:
+			out.WriteString(fmt.Sprintf("    mov word %s, cx\n", addr))
+		case hir.TypeI32, hir.TypeU32, hir.TypeChar, hir.TypeF32:
+			out.WriteString(fmt.Sprintf("    mov dword %s, ecx\n", addr))
+		default:
+			out.WriteString(fmt.Sprintf("    mov qword %s, rcx\n", addr))
 		}
 	case *mir.SetIndexStmt:
 		b.loadOperandToReg(s.Val, "rdx", offsets, out)
 		b.loadOperandToReg(s.Index, "rcx", offsets, out)
-		out.WriteString("    shl rcx, 3\n")
+		b.emitElemScaledIndex("rcx", s.Val.Type, out)
 		if s.Base.Kind == mir.OpLocal {
 			baseOffset := offsets[s.Base.LocalID]
 			out.WriteString(fmt.Sprintf("    mov rax, rbp\n"))
 			out.WriteString(fmt.Sprintf("    sub rax, %d\n", baseOffset))
 			out.WriteString("    add rax, rcx\n")
-			out.WriteString("    mov [rax], rdx\n")
+
+			fKind := hir.TypeI64
+			if s.Val.Type != nil {
+				fKind = s.Val.Type.Kind
+			}
+			switch fKind {
+			case hir.TypeBool, hir.TypeI8, hir.TypeU8:
+				out.WriteString("    mov byte [rax], dl\n")
+			case hir.TypeI16, hir.TypeU16:
+				out.WriteString("    mov word [rax], dx\n")
+			case hir.TypeI32, hir.TypeU32, hir.TypeChar, hir.TypeF32:
+				out.WriteString("    mov dword [rax], edx\n")
+			default:
+				out.WriteString("    mov [rax], rdx\n")
+			}
 		}
 	case *mir.AsmStmt:
 		out.WriteString(fmt.Sprintf("    %s\n", s.Assembly))
+	}
+}
+
+func (b *Backend) emitElemScaledIndex(indexReg string, elemType *hir.HIRType, out *bytes.Buffer) {
+	sz := 8
+	if elemType != nil && elemType.ByteSize() > 0 {
+		sz = elemType.ByteSize()
+	}
+	switch sz {
+	case 1:
+		// no scaling needed
+	case 2:
+		out.WriteString(fmt.Sprintf("    shl %s, 1\n", indexReg))
+	case 4:
+		out.WriteString(fmt.Sprintf("    shl %s, 2\n", indexReg))
+	case 8:
+		out.WriteString(fmt.Sprintf("    shl %s, 3\n", indexReg))
+	default:
+		out.WriteString(fmt.Sprintf("    imul %s, %d\n", indexReg, sz))
 	}
 }
 

@@ -296,9 +296,12 @@ func (sd *StructDecl) String() string {
 func (sd *StructDecl) declNode() {}
 
 type StructField struct {
-	Name string
-	Type Type
+	Position Position
+	Name     string
+	Type     Type
 }
+func (sf *StructField) Pos() Position { return sf.Position }
+func (sf *StructField) String() string { return sf.Name + " " + sf.Type.String() }
 
 type ImplDecl struct {
 	Position  Position

@@ -945,6 +945,7 @@ func (tc *TypeChecker) monomorphizeFunc(fd *ast.FuncDecl, typeArgs []ast.Type, m
 
 	specializedFunc := sub.cloneAndSubstitute(fd).(*ast.FuncDecl)
 	specializedFunc.Name = mangledName
+	specializedFunc.Generics = nil
 
 	// Copy new resolutions
 	for k, v := range sub.newRes {
@@ -985,6 +986,7 @@ func (tc *TypeChecker) monomorphizeStruct(sd *ast.StructDecl, typeArgs []ast.Typ
 
 	specializedStruct := sub.cloneAndSubstitute(sd).(*ast.StructDecl)
 	specializedStruct.Name = mangledName
+	specializedStruct.Generics = nil
 
 	for k, v := range sub.newRes {
 		tc.resolutions[k] = v
@@ -1202,13 +1204,17 @@ func (s *Substituter) cloneAndSubstitute(node ast.Node) ast.Node {
 			Target:   s.cloneAndSubstitute(n.Target).(ast.Expr),
 		}
 	case *ast.FuncDecl:
-		newParams := []ast.Param{}
-		for _, p := range n.Params {
+		newParams := make([]ast.Param, len(n.Params))
+		for i := range n.Params {
+			p := &n.Params[i]
 			clonedParamType := s.cloneAndSubstitute(p.Type).(ast.Type)
-			newParams = append(newParams, ast.Param{
-				Name: p.Name,
-				Type: clonedParamType,
-			})
+			newParams[i] = ast.Param{
+				Position: p.Position,
+				Name:     p.Name,
+				Mutable:  p.Mutable,
+				Type:     clonedParamType,
+			}
+			s.paramMap[p] = &newParams[i]
 			s.paramMap[p.Type] = clonedParamType
 		}
 		var newRet ast.Type
@@ -1228,13 +1234,15 @@ func (s *Substituter) cloneAndSubstitute(node ast.Node) ast.Node {
 			Body:       newBody,
 		}
 	case *ast.StructDecl:
-		newFields := []ast.StructField{}
-		for _, f := range n.Fields {
+		newFields := make([]ast.StructField, len(n.Fields))
+		for i := range n.Fields {
+			f := &n.Fields[i]
 			clonedFieldType := s.cloneAndSubstitute(f.Type).(ast.Type)
-			newFields = append(newFields, ast.StructField{
+			newFields[i] = ast.StructField{
 				Name: f.Name,
 				Type: clonedFieldType,
-			})
+			}
+			s.paramMap[f] = &newFields[i]
 			s.paramMap[f.Type] = clonedFieldType
 		}
 		cloned = &ast.StructDecl{
