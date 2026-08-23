@@ -1,307 +1,258 @@
 # Cupid
 
-A strictly statically typed, compiled systems programming language implemented in Go, targeting native x86-64 code via FASM (Flat Assembler).
-
-## Overview
-
-Cupid is an experimental systems programming language designed to combine strict static typing, modern language features (borrow checking), and direct native code generation. The compiler is written in Go and produces optimized x86-64 assembly that can be directly executed or integrated into larger systems.
-
-### Key Features
-
-- **Strict Static Typing** – Full type safety at compile time with comprehensive type inference
-- **Multi-Stage Compilation** – AST → HIR (High-level IR) → MIR (Mid-level IR) → FASM Assembly
-- **Borrow Checking** – Memory safety inspired by modern systems languages
-- **Native Code Generation** – Compiles directly to FASM x86-64 assembly
-- **Release & Debug Modes** – Built-in optimizer with configurable compilation strategies
-- **Modular Standard Library** – Core utilities, formatting, math, OS interaction, and strings
-- **Rich Examples** – 20+ example programs demonstrating language features
+A strictly statically typed, compiled systems programming language targeting native x86-64 machine code via FASM (Flat Assembler), featuring Go-inspired concurrency, compile-time memory safety, and zero garbage collection.
 
 ---
 
-## Repository Layout
+## Key Highlights
 
-```
-main.go                # CLI entry point (build, run, test, fmt commands)
-go.mod                 # Go 1.24.4 module definition
-
-compiler/              # Full compiler implementation
-  ├─ driver/          # Orchestration & compilation pipeline
-  ├─ lexer/           # Tokenization
-  ├─ parser/          # Parsing to AST
-  ├─ ast/             # Abstract syntax tree definitions
-  ├─ resolver/        # Name & symbol resolution
-  ├─ types/           # Type checking & inference
-  ├─ borrow/          # Borrow checker (memory safety)
-  ├─ hir/             # High-level intermediate representation
-  ├─ mir/             # Mid-level intermediate representation
-  ├─ backend/         # FASM x86-64 code generation
-  ├─ optimizer/       # IR optimization passes
-  ├─ modules/         # Module system & resolution
-  └─ diagnostics/     # Error reporting & formatting
-
-stdlib/                # Standard library (resolved at compile time)
-  ├─ core             # Language primitives
-  ├─ fmt              # Formatted printing
-  ├─ math             # Mathematical functions
-  ├─ os               # Operating system interface
-  └─ strings          # String utilities
-
-examples/              # 20+ example programs
-  └─ 01_hello.cu, 02_arithmetic.cu, ..., 20_all_primitive_types.cu
-```
-
-### How It Works
-
-1. **Module Resolution** – The driver resolves all input files and standard library dependencies into a complete module graph
-2. **Parsing & Name Resolution** – Source code is tokenized and parsed into an AST, then symbols are resolved against scope
-3. **Type Checking** – Full type checking with inference; all types must be statically verifiable
-4. **Borrow Checking** – Memory ownership rules are validated to prevent use-after-free and double-free
-5. **IR Lowering** – AST is lowered to high-level IR, then mid-level IR for optimization
-6. **Optimization** – Optional passes run in release mode to improve performance
-7. **Code Generation** – MIR is emitted as FASM x86-64 assembly
-8. **Assembly & Linking** – FASM assembler produces a native executable
+- **Direct Native Code** — Generates optimized x86-64 assembly; no VM, no bytecode, no interpreter.
+- **Strict Static Typing** — 18 primitive types (`i8`..`i64`, `u8`..`u64`, `int`, `uint`, `usize`, `isize`, `f32`, `f64`, `bool`, `string`, `char`, `void`) with zero implicit type coercion.
+- **Zero Garbage Collection** — Deterministic compile-time ownership, borrowing, and lifetime inference.
+- **Go-Style Concurrency** — Native lightweight routines (`go`), strongly typed channels (`channel<T>`), and multiplexing (`select`).
+- **Receiver Methods** — Go-inspired explicit receiver syntax (`fn (r: &mut Type) method()`).
+- **Pattern Matching & Error Handling** — Exhaustive `match` expressions, `Option<T>` / `Result<T, E>`, and the `?` error unwrapping operator.
+- **Hardware & Low-Level Control** — Explicit `unsafe` blocks and direct inline assembly (`asm { ... }`).
+- **Standard Library in Pure Cupid** — Core algorithms, collections, math, formatting, and OS bridges written primarily in Cupid.
 
 ---
 
-## Getting Started
+## Compiler Architecture
+
+```text
+Source (.cu)
+    │
+    ▼
+  Lexer ────────► Token Stream
+    │
+    ▼
+  Parser ───────► AST (Abstract Syntax Tree)
+    │
+    ▼
+Module & Symbol Resolver ──► Module Graph & Scopes
+    │
+    ▼
+Type Checker ───► Static Typing & Monomorphization
+    │
+    ▼
+Borrow Checker ─► Ownership & Memory Safety Verification
+    │
+    ▼
+  HIR ──────────► Desugared High-Level IR
+    │
+    ▼
+  MIR ──────────► Mid-Level Control Flow IR
+    │
+    ▼
+Optimizer ──────► Constant Folding, DCE, Inlining
+    │
+    ▼
+Native Backend ─► x86-64 FASM Assembly (.asm)
+    │
+    ▼
+Native Executable (.exe)
+```
+
+---
+
+## Quick Start
 
 ### Prerequisites
-
-- **Go 1.24 or later** (project built with Go 1.24.4)
-- **FASM (Flat Assembler)** – Downloaded and placed in a `fasm/` directory next to the compiler
+- **Go 1.24+** (to build the compiler)
+- **FASM** (`fasm/` directory with `FASM.EXE` included in repo)
 
 ### Building the Compiler
-
 ```bash
-# Clone the repository
-git clone https://github.com/2dprototype/Cupid.git
-cd Cupid
-
-# Build the compiler
-go build -o cupid .
-
-# Or install to $GOPATH/bin
-go install
+# Build the cupid compiler
+go build -o cupid.exe .
 ```
 
-### Compiling Cupid Programs
-
+### Running Programs
 ```bash
-# Compile to an executable
-./cupid build examples/01_hello.cu --output hello.exe
-
 # Compile and run immediately
-./cupid run examples/02_arithmetic.cu
+cupid run examples/01_hello.cu
 
-# Compile in release mode (with optimizations)
-./cupid build examples/07_fibonacci.cu --release
+# Build a native release executable
+cupid build examples/07_fibonacci.cu --release
 
-# Preserve generated assembly file
-./cupid build examples/08_vector2d.cu --emit-asm
-
-# Include debug information
-./cupid build examples/12_game_entity.cu --debug
+# Preserve generated x86-64 assembly
+cupid build examples/25_receiver_methods.cu --emit-asm
 ```
-
-### CLI Commands
-
-```bash
-./cupid build <file.cu> [flags]   # Compile a Cupid program
-./cupid run <file.cu> [flags]     # Compile and execute
-./cupid test                       # Run Go unit tests for the compiler
-./cupid fmt <file.cu>              # Format a Cupid source file (placeholder)
-./cupid help                       # Show usage information
-```
-
-### Flags
-
-- `--emit-asm` – Keep the generated `.asm` file (useful for inspection)
-- `--output, -o <path>` – Specify the output executable path
-- `--release` – Enable optimizer and release-mode optimizations
-- `--debug` – Include debugging symbols in the executable
 
 ---
 
-## Language Examples
+## Language Syntax & Examples
 
-### Hello World
+### 1. Variables & Immutability
+```cu
+// Immutable by default
+let name: string = "Cupid"
+let count = 42
 
-```rust
-// 01_hello.cu
-fn main() {
-    println("Hello, Cupid!")
-    println(42)
-    println(true)
-}
+// Explicitly mutable
+mut score: i64 = 0
+score += 10
+
+// Compile-time constant
+const MAX_LIMIT: i64 = 1000
 ```
 
-### Functions & Arithmetic
-
-```rust
-// 02_arithmetic.cu
-fn add(a: i64, b: i64) -> i64 {
-    return a + b
-}
-
-fn main() {
-    let x = 10
-    let y = 20
-    let result = add(x, y)
-    println(result)  // Output: 30
-}
-```
-
-### Control Flow
-
-```rust
-// 03_control_flow.cu
-fn main() {
-    let n = 5
-    if n > 0 {
-        println("positive")
-    } else {
-        println("non-positive")
-    }
-    
-    for i = 0; i < n; i = i + 1 {
-        println(i)
-    }
-}
-```
-
-### Structs & Methods
-
-```rust
-// 04_structs_methods.cu
+### 2. Functions & Go-Style Receivers
+```cu
 struct Point {
     x: i64
     y: i64
 }
 
-fn (p: Point) distance() -> i64 {
-    return p.x + p.y
+// Value receiver
+fn (p: Point) distance_sq() -> i64 {
+    return p.x * p.x + p.y * p.y
+}
+
+// Mutable reference receiver
+fn (p: &mut Point) translate(dx: i64, dy: i64) {
+    p.x += dx
+    p.y += dy
 }
 
 fn main() {
-    let pt = Point { x: 3, y: 4 }
-    println(pt.distance())
+    mut pt = Point{ x: 3, y: 4 }
+    pt.translate(2, 6)
+    println(pt.distance_sq())
 }
 ```
 
-See `examples/` for 16+ additional examples covering arrays, pattern matching, option types, generics, and more.
+### 3. Control Flow & Loops
+```cu
+fn main() {
+    let score = 85
+    if score >= 90 {
+        println("Grade: A")
+    } else {
+        println("Grade: B")
+    }
 
----
+    // Unified for loop
+    mut i = 0
+    for i < 5 {
+        if i == 2 {
+            i += 1
+            continue
+        }
+        println(i)
+        i += 1
+    }
+}
+```
 
-## Standard Library
+### 4. Pattern Matching
+```cu
+fn handle_status(code: i64) {
+    match code {
+        200 => {
+            println("OK: Success")
+        }
+        404 => {
+            println("Error: Not Found")
+        }
+        _ => {
+            println("Other status code")
+        }
+    }
+}
+```
 
-The `stdlib/` directory contains modules automatically resolved by the compiler:
+### 5. Concurrency (`go`, `channel`, `select`)
+```cu
+mut ch = channel<i64>()
 
-- **core** – Fundamental types and primitives
-- **fmt** – `println()`, formatted output
-- **math** – Arithmetic and mathematical functions
-- **os** – Process exit, environment interaction
-- **strings** – String manipulation utilities
-
-Import and use with:
-
-```rust
-use strings
+fn worker(id: i64) {
+    Sleep(20)
+    ch.send(id * 100)
+}
 
 fn main() {
-    let s = strings::to_upper("hello")
-    println(s)
+    go worker(5)
+    
+    select {
+        case val = ch.recv():
+            println("Received from worker:")
+            println(val)
+    }
+}
+```
+
+### 6. Modules & Standard Library
+```cu
+import "math" as m
+import { to_upper, trim_space } from "strings"
+
+fn main() {
+    let max_val = m.max(10, 50)
+    let text = to_upper("hello cupid")
+    println(max_val)
+    println(text)
+}
+```
+
+### 7. Inline Assembly & Unsafe
+```cu
+fn main() {
+    unsafe {
+        asm {
+            mov rax, 100
+            add rax, 23
+            mov rcx, rax
+            call _cupid_print_i64
+            call _cupid_println
+        }
+    }
 }
 ```
 
 ---
 
-## Development & Contributing
+## Standard Library Modules (`stdlib/`)
 
-### Running Tests
-
-```bash
-go test ./...
-```
-
-Tests are located throughout the compiler packages and cover parser, type checker, borrow checker, and backend functionality.
-
-### Contributing Guidelines
-
-1. **Small, focused changes** – Keep PRs focused on a single feature or fix
-2. **Test frequently** – Run `go test ./...` after modifying compiler internals
-3. **Add examples** – Demonstrate new features with `.cu` files in `examples/`
-4. **Follow Go conventions** – Use standard Go idioms and formatting (`gofmt`)
+| Module | Description |
+| :--- | :--- |
+| `core` | Fundamental traits (`Comparable<T>`, `Equatable<T>`, `Clone<T>`), `Option<T>`, `Result<T, E>` |
+| `math` | Mathematical functions (`abs`, `min`, `max`, `clamp`, `PI`, `E`) |
+| `strings` | String manipulation (`to_upper`, `to_lower`, `trim_space`, `contains`, `index_of`, `split`) |
+| `collections` | Generic data structures (`Vector<T>`, `HashMap<K, V>`) |
+| `os` | Operating system interaction and process control (`exit`) |
+| `fmt` | Formatted output and printing |
+| `sync` | Synchronization primitives (`Mutex`, `RwMutex`) |
 
 ---
 
-## Known Limitations & Future Work
+## Project Structure
 
-- **Platform** – Backend currently targets FASM/x86-64 only (Windows-style `FASM.EXE`); cross-platform support may require additional work
-- **Formatter** – The `cupid fmt` command is a placeholder
-- **Standard Library** – Core library is minimal; community contributions welcome
-- **Inline Assembly** – Supported but limited to x86-64 FASM syntax
-- **Error Messages** – Diagnostics are functional but could be more detailed
-
----
-
-## Architecture Highlights
-
-### Compilation Pipeline
-
-The `compiler/driver/driver.go` orchestrates all stages:
-
+```text
+cupid/
+├── compiler/
+│   ├── ast/           # AST node definitions
+│   ├── backend/       # FASM x86-64 native code emitter
+│   ├── borrow/        # Ownership and borrow checker
+│   ├── diagnostics/   # Error reporting with source code spans
+│   ├── driver/        # Compiler pipeline driver
+│   ├── hir/           # High-level intermediate representation
+│   ├── lexer/         # UTF-8 token stream lexer
+│   ├── mir/           # Control-flow mid-level IR
+│   ├── modules/       # Module dependency resolution
+│   ├── optimizer/     # SSA/MIR optimizations
+│   ├── parser/        # Handwritten recursive-descent parser
+│   ├── resolver/      # Lexical scoping and symbol resolution
+│   └── types/         # Strict type checking & monomorphization
+├── stdlib/            # Standard library in pure Cupid
+├── examples/          # 35+ verified runnable examples
+├── fasm/              # Flat Assembler binaries and includes
+├── main.go            # CLI entry point
+└── plan.md            # Master language blueprint
 ```
-Input File
-    ↓
-Module Resolution (resolver/*) + Parsing (parser/*)
-    ↓
-Name & Symbol Resolution (resolver/*)
-    ↓
-Type Checking (types/*)
-    ↓
-Borrow Checking (borrow/*)
-    ↓
-AST → HIR Lowering (hir/*)
-    ↓
-HIR → MIR Lowering (mir/*)
-    ↓
-Optimization (optimizer/*) [release mode]
-    ↓
-Code Generation (backend/*) → .asm
-    ↓
-FASM Assembly → Executable
-```
-
-### Key Modules
-
-| Module | Purpose |
-|--------|---------|
-| `lexer/` | Tokenizes Cupid source into tokens |
-| `parser/` | Builds AST from tokens |
-| `types/` | Type inference and checking |
-| `resolver/` | Resolves names to definitions |
-| `borrow/` | Validates memory ownership rules |
-| `hir/` | High-level IR (closer to source) |
-| `mir/` | Mid-level IR (closer to machine) |
-| `backend/` | Generates FASM x86-64 assembly |
-| `optimizer/` | Applies optimization passes |
 
 ---
 
 ## License
 
-Add a LICENSE file (currently unspecified). Recommended: MIT, Apache 2.0, or GPL 3.0 for open-source projects.
-
----
-
-## Questions & Support
-
-- **Want to contribute?** Read the contributing section and open a PR
-- **Found a bug?** Open an issue with a minimal example
-- **Have a feature request?** Start a discussion or open an issue labeled `enhancement`
-
-For more details on the compiler architecture, see the code comments in `compiler/driver/driver.go` and individual module READMEs (if present).
-
----
-
-**Made with ❤️ by 2dprototype**
+Cupid is licensed under the MIT License.
