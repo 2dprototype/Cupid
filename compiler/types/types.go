@@ -156,6 +156,29 @@ func (tc *TypeChecker) checkAssignable(expectedType ast.Type, expr ast.Expr, val
 			return true
 		}
 	}
+
+	// Contextual typing for array literals: [1, 2, 3, 4] -> [4]i32
+	if expArr, ok := expectedType.(*ast.ArrayType); ok {
+		if arrLit, ok := expr.(*ast.ArrayLiteralExpr); ok {
+			if expArr.Size == -1 || expArr.Size == len(arrLit.Elements) {
+				allAssignable := true
+				for _, elem := range arrLit.Elements {
+					elemValType := tc.ExprTypes[elem]
+					if elemValType == nil {
+						elemValType = tc.TypeCheckExpr(elem, nil)
+					}
+					if !tc.checkAssignable(expArr.Element, elem, elemValType) {
+						allAssignable = false
+						break
+					}
+				}
+				if allAssignable {
+					tc.ExprTypes[expr] = expectedType
+					return true
+				}
+			}
+		}
+	}
 	return false
 }
 

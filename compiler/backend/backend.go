@@ -73,6 +73,11 @@ func (b *Backend) Generate() (string, error) {
 	dataBuf.WriteString("    _cupid_fmt_f64 db '%f', 0\n")
 	dataBuf.WriteString("    _cupid_fmt_str db '%s', 0\n")
 	dataBuf.WriteString("    _cupid_fmt_bounds_panic db 'panic: string index out of bounds: index %lld, len %lld', 13, 10, 0\n")
+	dataBuf.WriteString("    _cupid_lbracket db '[', 0\n")
+	dataBuf.WriteString("    _cupid_rbracket db ']', 0\n")
+	dataBuf.WriteString("    _cupid_comma_space db ', ', 0\n")
+	dataBuf.WriteString("    _cupid_single_quote db 39, 0\n")
+	dataBuf.WriteString("    _cupid_double_quote db 34, 0\n")
 
 	for strVal, label := range b.strTable {
 		escaped := b.formatFasmString(strVal)
@@ -119,12 +124,19 @@ func (b *Backend) Generate() (string, error) {
 	// Emit imports
 	out.WriteString("\nsection '.idata' import data readable writeable\n")
 	out.WriteString("library kernel32,'KERNEL32.DLL', \\\n")
+	out.WriteString("        user32,'USER32.DLL', \\\n")
 	out.WriteString("        msvcrt,'MSVCRT.DLL'\n\n")
 	out.WriteString("import kernel32, \\\n")
 	out.WriteString("       ExitProcess,'ExitProcess', \\\n")
 	out.WriteString("       GetStdHandle,'GetStdHandle', \\\n")
 	out.WriteString("       WriteFile,'WriteFile', \\\n")
 	out.WriteString("       ReadFile,'ReadFile', \\\n")
+	out.WriteString("       CreateFileA,'CreateFileA', \\\n")
+	out.WriteString("       GetFileSizeEx,'GetFileSizeEx', \\\n")
+	out.WriteString("       DeleteFileA,'DeleteFileA', \\\n")
+	out.WriteString("       GetFileAttributesA,'GetFileAttributesA', \\\n")
+	out.WriteString("       GetTickCount64,'GetTickCount64', \\\n")
+	out.WriteString("       Beep,'Beep', \\\n")
 	out.WriteString("       GetProcessHeap,'GetProcessHeap', \\\n")
 	out.WriteString("       HeapAlloc,'HeapAlloc', \\\n")
 	out.WriteString("       HeapFree,'HeapFree', \\\n")
@@ -136,6 +148,9 @@ func (b *Backend) Generate() (string, error) {
 	out.WriteString("       CreateMutexA,'CreateMutexA', \\\n")
 	out.WriteString("       ReleaseMutex,'ReleaseMutex', \\\n")
 	out.WriteString("       CloseHandle,'CloseHandle'\n\n")
+	out.WriteString("import user32, \\\n")
+	out.WriteString("       MessageBoxA,'MessageBoxA', \\\n")
+	out.WriteString("       GetSystemMetrics,'GetSystemMetrics'\n\n")
 	out.WriteString("import msvcrt, \\\n")
 	out.WriteString("       printf,'printf', \\\n")
 	out.WriteString("       sprintf,'sprintf'\n")
@@ -829,6 +844,8 @@ func (b *Backend) generateCall(call *mir.CallRvalue, destOffset int, offsets map
 					out.WriteString("    cvtss2sd xmm0, xmm0\n")
 				}
 				out.WriteString("    call _cupid_print_f64\n")
+			} else if arg.Type != nil && arg.Type.Kind == hir.TypeArray {
+				b.generatePrintArray(arg, offsets, out)
 			} else {
 				b.loadOperandToReg(arg, "rcx", offsets, out)
 				out.WriteString("    call _cupid_print_i64\n")
@@ -878,6 +895,78 @@ func (b *Backend) generateCall(call *mir.CallRvalue, destOffset int, offsets map
 	} else {
 		out.WriteString(fmt.Sprintf("    mov [rbp - %d], rax\n", destOffset))
 	}
+}
+
+func (b *Backend) generatePrintArray(arg mir.Operand, offsets map[int]int, out *bytes.Buffer) {
+	elemType := &hir.HIRType{Kind: hir.TypeI64}
+	if arg.Type != nil && arg.Type.ElemType != nil {
+		elemType = arg.Type.ElemType
+	}
+	elemSize := elemType.ByteSize()
+	size := 0
+	if arg.Type != nil {
+		size = arg.Type.Size
+	}
+
+	out.WriteString("    lea rcx, [_cupid_lbracket]\n")
+	out.WriteString("    call _cupid_print_str\n")
+
+	baseOffset := 0
+	if arg.Kind == mir.OpLocal {
+		baseOffset = offsets[arg.LocalID]
+	}
+
+	for i := 0; i < size; i++ {
+		if i > 0 {
+			out.WriteString("    lea rcx, [_cupid_comma_space]\n")
+			out.WriteString("    call _cupid_print_str\n")
+		}
+
+		addr := fmt.Sprintf("[rbp - %d + %d]", baseOffset, i*elemSize)
+
+		switch elemType.Kind {
+		case hir.TypeChar:
+			out.WriteString(fmt.Sprintf("    movzx rcx, byte %s\n", addr))
+			out.WriteString("    call _cupid_print_char_literal\n")
+		case hir.TypeString:
+			out.WriteString(fmt.Sprintf("    mov rcx, %s\n", addr))
+			out.WriteString("    call _cupid_print_str_literal\n")
+		case hir.TypeBool:
+			out.WriteString(fmt.Sprintf("    movzx rcx, byte %s\n", addr))
+			out.WriteString("    call _cupid_print_bool\n")
+		case hir.TypeF32:
+			out.WriteString(fmt.Sprintf("    movss xmm0, %s\n", addr))
+			out.WriteString("    cvtss2sd xmm0, xmm0\n")
+			out.WriteString("    call _cupid_print_f64\n")
+		case hir.TypeF64:
+			out.WriteString(fmt.Sprintf("    movsd xmm0, %s\n", addr))
+			out.WriteString("    call _cupid_print_f64\n")
+		case hir.TypeI8:
+			out.WriteString(fmt.Sprintf("    movsx rcx, byte %s\n", addr))
+			out.WriteString("    call _cupid_print_i64\n")
+		case hir.TypeU8:
+			out.WriteString(fmt.Sprintf("    movzx rcx, byte %s\n", addr))
+			out.WriteString("    call _cupid_print_i64\n")
+		case hir.TypeI16:
+			out.WriteString(fmt.Sprintf("    movsx rcx, word %s\n", addr))
+			out.WriteString("    call _cupid_print_i64\n")
+		case hir.TypeU16:
+			out.WriteString(fmt.Sprintf("    movzx rcx, word %s\n", addr))
+			out.WriteString("    call _cupid_print_i64\n")
+		case hir.TypeI32:
+			out.WriteString(fmt.Sprintf("    movsxd rcx, dword %s\n", addr))
+			out.WriteString("    call _cupid_print_i64\n")
+		case hir.TypeU32:
+			out.WriteString(fmt.Sprintf("    mov ecx, dword %s\n", addr))
+			out.WriteString("    call _cupid_print_i64\n")
+		default:
+			out.WriteString(fmt.Sprintf("    mov rcx, %s\n", addr))
+			out.WriteString("    call _cupid_print_i64\n")
+		}
+	}
+
+	out.WriteString("    lea rcx, [_cupid_rbracket]\n")
+	out.WriteString("    call _cupid_print_str\n")
 }
 
 func (b *Backend) generateTerminator(term mir.Terminator, fn *mir.MIRFunction, offsets map[int]int, out *bytes.Buffer) {
@@ -1226,6 +1315,45 @@ func (b *Backend) emitRuntimeHelpers(out *bytes.Buffer) {
 	out.WriteString("    mov [rbp - 8], cl\n")
 	out.WriteString("    mov byte [rbp - 7], 0\n")
 	out.WriteString("    lea rdx, [rbp - 8]\n")
+	out.WriteString("    lea rcx, [_cupid_fmt_str]\n")
+	out.WriteString("    call [printf]\n")
+	out.WriteString("    mov rsp, rbp\n")
+	out.WriteString("    pop rbp\n")
+	out.WriteString("    ret\n\n")
+
+	// _cupid_print_char_literal: RCX contains character byte -> prints 'c'
+	out.WriteString("_cupid_print_char_literal:\n")
+	out.WriteString("    push rbp\n")
+	out.WriteString("    mov rbp, rsp\n")
+	out.WriteString("    sub rsp, 48\n")
+	out.WriteString("    mov [rbp - 8], cl\n")
+	out.WriteString("    mov byte [rbp - 7], 0\n")
+	out.WriteString("    lea rdx, [_cupid_single_quote]\n")
+	out.WriteString("    lea rcx, [_cupid_fmt_str]\n")
+	out.WriteString("    call [printf]\n")
+	out.WriteString("    lea rdx, [rbp - 8]\n")
+	out.WriteString("    lea rcx, [_cupid_fmt_str]\n")
+	out.WriteString("    call [printf]\n")
+	out.WriteString("    lea rdx, [_cupid_single_quote]\n")
+	out.WriteString("    lea rcx, [_cupid_fmt_str]\n")
+	out.WriteString("    call [printf]\n")
+	out.WriteString("    mov rsp, rbp\n")
+	out.WriteString("    pop rbp\n")
+	out.WriteString("    ret\n\n")
+
+	// _cupid_print_str_literal: RCX contains string pointer -> prints "str"
+	out.WriteString("_cupid_print_str_literal:\n")
+	out.WriteString("    push rbp\n")
+	out.WriteString("    mov rbp, rsp\n")
+	out.WriteString("    sub rsp, 48\n")
+	out.WriteString("    mov [rbp - 8], rcx\n")
+	out.WriteString("    lea rdx, [_cupid_double_quote]\n")
+	out.WriteString("    lea rcx, [_cupid_fmt_str]\n")
+	out.WriteString("    call [printf]\n")
+	out.WriteString("    mov rdx, [rbp - 8]\n")
+	out.WriteString("    lea rcx, [_cupid_fmt_str]\n")
+	out.WriteString("    call [printf]\n")
+	out.WriteString("    lea rdx, [_cupid_double_quote]\n")
 	out.WriteString("    lea rcx, [_cupid_fmt_str]\n")
 	out.WriteString("    call [printf]\n")
 	out.WriteString("    mov rsp, rbp\n")

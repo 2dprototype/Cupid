@@ -70,22 +70,6 @@ func (bc *BorrowChecker) isCopyType(t ast.Type) bool {
 		case "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "f32", "f64", "bool", "char", "void", "int", "uint", "usize", "isize", "string":
 			return true
 		default:
-			// Check if struct fields are all copy
-			for _, mod := range bc.modules {
-				for _, decl := range mod.AST.Decls {
-					if sd, ok := decl.(*ast.StructDecl); ok && sd.Name == pt.Name {
-						if len(sd.Fields) == 0 {
-							return true
-						}
-						for _, f := range sd.Fields {
-							if !bc.isCopyType(f.Type) {
-								return false
-							}
-						}
-						return true
-					}
-				}
-			}
 			return false
 		}
 	case *ast.PointerType:
