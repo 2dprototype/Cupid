@@ -324,9 +324,9 @@ func (p *Parser) parseFuncDecl(exported bool) *ast.FuncDecl {
 	}
 
 	var whereClauses []ast.WhereClause
-	if p.peekTokenIs(lexer.WHERE) { // wait, WHERE is not a lexer keyword explicitly but an identifier
+	if p.peekTokenIs(lexer.WHERE) {
 		p.nextToken() // consume 'where'
-		for {
+		for !p.peekTokenIs(lexer.LBRACE) && !p.peekTokenIs(lexer.EOF) {
 			if !p.expectPeek(lexer.IDENT) {
 				break
 			}
@@ -503,7 +503,7 @@ func (p *Parser) parseImplDecl() *ast.ImplDecl {
 	var traitName string
 	var targetType ast.Type
 
-	if p.peekTokenIs(lexer.IDENT) && p.peekToken.Literal == "for" {
+	if p.peekTokenIs(lexer.FOR) || (p.peekTokenIs(lexer.IDENT) && p.peekToken.Literal == "for") {
 		p.nextToken() // consume 'for'
 		p.nextToken()
 		targetType = p.parseType()
@@ -1108,7 +1108,11 @@ const (
 	ASSIGNMENT // = or +=
 	OR         // ||
 	AND        // &&
+	BIT_OR     // |
+	BIT_XOR    // ^
+	BIT_AND    // &
 	COMPARE    // == != < <= > >=
+	SHIFT      // << >>
 	SUM        // + -
 	PRODUCT    // * / %
 	PREFIX     // -x or !x or &x or *x
@@ -1124,12 +1128,17 @@ var precedences = map[lexer.TokenType]int{
 	lexer.MOD_ASSIGN: ASSIGNMENT,
 	lexer.OR:         OR,
 	lexer.AND:        AND,
+	lexer.BITOR:      BIT_OR,
+	lexer.BITXOR:     BIT_XOR,
+	lexer.BITAND:     BIT_AND,
 	lexer.EQ:         COMPARE,
 	lexer.NEQ:        COMPARE,
 	lexer.LT:         COMPARE,
 	lexer.LTE:        COMPARE,
 	lexer.GT:         COMPARE,
 	lexer.GTE:        COMPARE,
+	lexer.SHL:        SHIFT,
+	lexer.SHR:        SHIFT,
 	lexer.ADD:        SUM,
 	lexer.SUB:        SUM,
 	lexer.MUL:        PRODUCT,
@@ -1224,7 +1233,9 @@ func (p *Parser) parseInfixFn(t lexer.TokenType) infixParseFn {
 	switch t {
 	case lexer.ADD, lexer.SUB, lexer.MUL, lexer.DIV, lexer.MOD,
 		lexer.EQ, lexer.NEQ, lexer.LT, lexer.LTE, lexer.GT, lexer.GTE,
-		lexer.AND, lexer.OR, lexer.ASSIGN, lexer.ADD_ASSIGN, lexer.SUB_ASSIGN,
+		lexer.AND, lexer.OR, lexer.BITAND, lexer.BITOR, lexer.BITXOR,
+		lexer.SHL, lexer.SHR,
+		lexer.ASSIGN, lexer.ADD_ASSIGN, lexer.SUB_ASSIGN,
 		lexer.MUL_ASSIGN, lexer.DIV_ASSIGN, lexer.MOD_ASSIGN:
 		return p.parseBinaryExpr
 	case lexer.LPAREN:
