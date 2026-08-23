@@ -32,6 +32,10 @@ func (tc *TypeChecker) Errors() []error {
 	return tc.errors
 }
 
+func (tc *TypeChecker) Resolutions() map[ast.Node]ast.Node {
+	return tc.resolutions
+}
+
 // isIntegerType returns true if t is a primitive integer type.
 func isIntegerType(t ast.Type) bool {
     if prim, ok := t.(*ast.PrimitiveType); ok {
@@ -916,6 +920,17 @@ func (tc *TypeChecker) typeCheckCallExpr(ce *ast.CallExpr, mod *modules.Module) 
 									tc.resolutions[se] = fd
 									break
 								}
+								// Also match generic receiver e.g. fn (p: &Pair<T>) with target Pair_i64
+								recBase := getBaseTypeName(recType)
+								targetBase := getBaseTypeName(targetType)
+								if recBase != "" && recBase == targetBase && funcDecl.Name == se.Field {
+									typeArgs := extractTypeArgsFromTypeName(typeName)
+									if len(typeArgs) > 0 {
+										fd = tc.monomorphizeFunc(funcDecl, typeArgs, mod)
+										tc.resolutions[se] = fd
+										break
+									}
+								}
 							} else if id, ok := decl.(*ast.ImplDecl); ok && id.Target.String() == typeName {
 								for _, method := range id.Methods {
 									if method.Name == se.Field {
@@ -949,13 +964,11 @@ func (tc *TypeChecker) typeCheckCallExpr(ce *ast.CallExpr, mod *modules.Module) 
 			inferred := make([]ast.Type, len(fd.Generics))
 			for gi, gp := range fd.Generics {
 				for pi, param := range fd.Params {
-					if prim, ok := param.Type.(*ast.PrimitiveType); ok && prim.Name == gp.Name {
-						if pi < len(ce.Args) {
-							argType := tc.TypeCheckExpr(ce.Args[pi], mod)
-							if argType != nil {
-								inferred[gi] = argType
-								break
-							}
+					if pi < len(ce.Args) {
+						argType := tc.TypeCheckExpr(ce.Args[pi], mod)
+						if match := extractGenericType(param.Type, gp.Name, argType); match != nil {
+							inferred[gi] = match
+							break
 						}
 					}
 				}
@@ -1136,7 +1149,17 @@ func (tc *TypeChecker) monomorphizeFunc(fd *ast.FuncDecl, typeArgs []ast.Type, m
 	// Create type map
 	typeMap := make(map[string]ast.Type)
 	for i, gp := range fd.Generics {
-		typeMap[gp.Name] = typeArgs[i]
+		if i < len(typeArgs) {
+			typeMap[gp.Name] = typeArgs[i]
+		}
+	}
+	if fd.Receiver != nil {
+		recVars := extractTypeVarsFromType(fd.Receiver.Type, mod)
+		for i, v := range recVars {
+			if i < len(typeArgs) {
+				typeMap[v] = typeArgs[i]
+			}
+		}
 	}
 
 	sub := &Substituter{
@@ -1519,6 +1542,115 @@ func (s *Substituter) cloneType(t ast.Type) ast.Type {
 func isIntegerTypeName(s string) bool {
 	switch s {
 	case "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "int", "uint", "usize", "isize":
+		return true
+	}
+	return false
+}
+
+func extractGenericType(paramType ast.Type, genericName string, argType ast.Type) ast.Type {
+	if paramType == nil || argType == nil {
+		return nil
+	}
+	if prim, ok := paramType.(*ast.PrimitiveType); ok && prim.Name == genericName {
+		return argType
+	}
+	if ptr, ok := paramType.(*ast.PointerType); ok {
+		if argPtr, ok := argType.(*ast.PointerType); ok {
+			return extractGenericType(ptr.To, genericName, argPtr.To)
+		}
+		return extractGenericType(ptr.To, genericName, argType)
+	}
+	if arr, ok := paramType.(*ast.ArrayType); ok {
+		if argArr, ok := argType.(*ast.ArrayType); ok {
+			return extractGenericType(arr.Element, genericName, argArr.Element)
+		}
+	}
+	if gt, ok := paramType.(*ast.GenericType); ok {
+		if argGt, ok := argType.(*ast.GenericType); ok && gt.BaseName == argGt.BaseName {
+			for i, p := range gt.Params {
+				if i < len(argGt.Params) {
+					if res := extractGenericType(p, genericName, argGt.Params[i]); res != nil {
+						return res
+					}
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func getBaseTypeName(t ast.Type) string {
+	if t == nil {
+		return ""
+	}
+	switch pt := t.(type) {
+	case *ast.PrimitiveType:
+		name := pt.Name
+		if idx := strings.Index(name, "_"); idx != -1 {
+			return name[:idx]
+		}
+		return name
+	case *ast.PointerType:
+		return getBaseTypeName(pt.To)
+	case *ast.GenericType:
+		return pt.BaseName
+	}
+	return t.String()
+}
+
+func extractTypeArgsFromTypeName(typeName string) []ast.Type {
+	if idx := strings.Index(typeName, "_"); idx != -1 {
+		parts := strings.Split(typeName[idx+1:], "_")
+		var types []ast.Type
+		for _, part := range parts {
+			types = append(types, &ast.PrimitiveType{Name: part})
+		}
+		return types
+	}
+	return nil
+}
+
+func extractTypeVarsFromType(t ast.Type, mod *modules.Module) []string {
+	if t == nil {
+		return nil
+	}
+	switch pt := t.(type) {
+	case *ast.PointerType:
+		return extractTypeVarsFromType(pt.To, mod)
+	case *ast.GenericType:
+		var vars []string
+		for _, p := range pt.Params {
+			if prim, ok := p.(*ast.PrimitiveType); ok {
+				if !isBuiltinTypeName(prim.Name) {
+					isStruct := false
+					if mod != nil && mod.AST != nil {
+						for _, d := range mod.AST.Decls {
+							if sd, ok := d.(*ast.StructDecl); ok && sd.Name == prim.Name {
+								isStruct = true
+								break
+							}
+						}
+					}
+					if !isStruct {
+						vars = append(vars, prim.Name)
+					}
+				}
+			} else {
+				vars = append(vars, extractTypeVarsFromType(p, mod)...)
+			}
+		}
+		return vars
+	case *ast.ArrayType:
+		return extractTypeVarsFromType(pt.Element, mod)
+	}
+	return nil
+}
+
+func isBuiltinTypeName(name string) bool {
+	switch name {
+	case "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64",
+		"int", "uint", "usize", "isize",
+		"f32", "f64", "bool", "string", "char", "void":
 		return true
 	}
 	return false

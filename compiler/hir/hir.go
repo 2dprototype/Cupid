@@ -809,7 +809,14 @@ func (l *Lowerer) lowerExpr(expr ast.Expr, mod *modules.Module) HIRExpr {
 				}
 			}
 
-			if decl, ok := l.resolver.Resolutions[sel]; ok {
+			var decl ast.Node
+			if d, ok := l.tc.Resolutions()[sel]; ok {
+				decl = d
+			} else if d, ok := l.resolver.Resolutions[sel]; ok {
+				decl = d
+			}
+
+			if decl != nil {
 				if fd, isFunc := decl.(*ast.FuncDecl); isFunc {
 					if fd.Receiver != nil {
 						recType := l.convertType(fd.Receiver.Type)
@@ -840,7 +847,14 @@ func (l *Lowerer) lowerExpr(expr ast.Expr, mod *modules.Module) HIRExpr {
 				args = append(args, target)
 			}
 		} else if ident, ok := e.Function.(*ast.IdentExpr); ok {
-			if decl, ok := l.resolver.Resolutions[ident]; ok {
+			var decl ast.Node
+			if d, ok := l.tc.Resolutions()[ident]; ok {
+				decl = d
+			} else if d, ok := l.resolver.Resolutions[ident]; ok {
+				decl = d
+			}
+
+			if decl != nil {
 				if fd, isFunc := decl.(*ast.FuncDecl); isFunc {
 					funcName = fd.Name
 				} else {

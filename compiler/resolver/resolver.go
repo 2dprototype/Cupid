@@ -155,6 +155,19 @@ func (r *Resolver) resolveFuncDecl(fd *ast.FuncDecl, mod *modules.Module, parent
 		})
 	}
 
+	// Extract and register generic parameters from receiver e.g. fn (p: &Pair<T>)
+	if fd.Receiver != nil {
+		for _, gName := range extractTypeVarsFromType(fd.Receiver.Type, mod) {
+			if funcScope.Lookup(gName) == nil {
+				funcScope.Insert(&Symbol{
+					Name:     gName,
+					Kind:     SymTypeVar,
+					DeclNode: fd.Receiver,
+				})
+			}
+		}
+	}
+
 	// Add receiver to scope if present
 	if fd.Receiver != nil {
 		r.resolveType(fd.Receiver.Type, mod, funcScope)
@@ -512,7 +525,58 @@ func (r *Resolver) resolveType(t ast.Type, mod *modules.Module, scope *Scope) {
 		r.resolveType(pt.To, mod, scope)
 	case *ast.ArrayType:
 		r.resolveType(pt.Element, mod, scope)
+	case *ast.GenericType:
+		r.resolveType(&ast.PrimitiveType{Position: pt.Position, Name: pt.BaseName}, mod, scope)
+		for _, p := range pt.Params {
+			r.resolveType(p, mod, scope)
+		}
 	}
+}
+
+func isBuiltinTypeName(name string) bool {
+	switch name {
+	case "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64",
+		"int", "uint", "usize", "isize",
+		"f32", "f64", "bool", "string", "char", "void":
+		return true
+	}
+	return false
+}
+
+func extractTypeVarsFromType(t ast.Type, mod *modules.Module) []string {
+	if t == nil {
+		return nil
+	}
+	switch pt := t.(type) {
+	case *ast.PointerType:
+		return extractTypeVarsFromType(pt.To, mod)
+	case *ast.GenericType:
+		var vars []string
+		for _, p := range pt.Params {
+			if prim, ok := p.(*ast.PrimitiveType); ok {
+				if !isBuiltinTypeName(prim.Name) {
+					isStruct := false
+					if mod != nil && mod.AST != nil {
+						for _, d := range mod.AST.Decls {
+							if sd, ok := d.(*ast.StructDecl); ok && sd.Name == prim.Name {
+								isStruct = true
+								break
+							}
+						}
+					}
+					if !isStruct {
+						vars = append(vars, prim.Name)
+					}
+				}
+			} else {
+				vars = append(vars, extractTypeVarsFromType(p, mod)...)
+			}
+		}
+		return vars
+	case *ast.ArrayType:
+		return extractTypeVarsFromType(pt.Element, mod)
+	}
+	return nil
 }
 
 func (r *Resolver) reportError(pos ast.Position, msg string, code string, spanLen int) {
