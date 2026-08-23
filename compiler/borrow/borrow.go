@@ -67,13 +67,18 @@ func (bc *BorrowChecker) isCopyType(t ast.Type) bool {
 	switch pt := t.(type) {
 	case *ast.PrimitiveType:
 		switch pt.Name {
-		case "i32", "i64", "u32", "u64", "f32", "f64", "bool", "char", "void", "string", "int", "uint", "usize", "isize":
+		case "i32", "i64", "u32", "u64", "f32", "f64", "bool", "char", "void", "int", "uint", "usize", "isize":
 			return true
+		case "string":
+			return false
 		default:
 			// Check if struct fields are all copy
 			for _, mod := range bc.modules {
 				for _, decl := range mod.AST.Decls {
 					if sd, ok := decl.(*ast.StructDecl); ok && sd.Name == pt.Name {
+						if len(sd.Fields) == 0 {
+							return true
+						}
 						for _, f := range sd.Fields {
 							if !bc.isCopyType(f.Type) {
 								return false
@@ -83,7 +88,7 @@ func (bc *BorrowChecker) isCopyType(t ast.Type) bool {
 					}
 				}
 			}
-			return true
+			return false
 		}
 	case *ast.PointerType:
 		return true // references themselves are copy
@@ -248,6 +253,28 @@ func (bc *BorrowChecker) checkStmt(stmt ast.Stmt, env *borrowEnv, mod *modules.M
 
 	case *ast.UnsafeBlock:
 		bc.checkBlockStmt(s.Block, env, mod)
+
+	case *ast.AsmBlock:
+		// Raw assembly statement
+
+	case *ast.GoStmt:
+		bc.checkExpr(s.Call, env, mod, false)
+
+	case *ast.SelectStmt:
+		for _, c := range s.Cases {
+			if c.ChannelOp != nil {
+				bc.checkExpr(c.ChannelOp, env, mod, false)
+			}
+			if c.VarName != "" {
+				env.declaredInBlock[env.nestingLevel] = append(env.declaredInBlock[env.nestingLevel], c.VarName)
+			}
+			if c.Body != nil {
+				bc.checkBlockStmt(c.Body, env, mod)
+			}
+		}
+		if s.Default != nil {
+			bc.checkBlockStmt(s.Default, env, mod)
+		}
 	}
 }
 
@@ -372,6 +399,10 @@ func (bc *BorrowChecker) checkAssignTarget(target ast.Expr, env *borrowEnv, mod 
 		}
 		if _, ok := decl.(*ast.GlobalConstDecl); ok {
 			bc.reportError(ident.Pos(), fmt.Sprintf("cannot assign to constant %q", ident.Name), "E201", len(ident.Name))
+			return
+		}
+		if gv, ok := decl.(*ast.GlobalVarDecl); ok && !gv.Mutable {
+			bc.reportError(ident.Pos(), fmt.Sprintf("cannot assign to immutable variable %q (declare with 'mut' to make it mutable)", ident.Name), "E201", len(ident.Name))
 			return
 		}
 
@@ -508,6 +539,20 @@ func isIdentUsedInStmt(name string, stmt ast.Stmt) bool {
 		return isIdentUsedInBlock(name, s)
 	case *ast.UnsafeBlock:
 		return isIdentUsedInBlock(name, s.Block)
+	case *ast.AsmBlock:
+		return false
+	case *ast.GoStmt:
+		return isIdentUsedInExpr(name, s.Call)
+	case *ast.SelectStmt:
+		for _, c := range s.Cases {
+			if isIdentUsedInExpr(name, c.ChannelOp) || isIdentUsedInBlock(name, c.Body) {
+				return true
+			}
+		}
+		if s.Default != nil {
+			return isIdentUsedInBlock(name, s.Default)
+		}
+		return false
 	}
 	return false
 }

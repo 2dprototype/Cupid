@@ -1,10 +1,9 @@
 // 19_typed_arrays.cu: Explicit array type annotations and validation
 
-fn sum_fixed_array(arr: [4]i32) -> i32 {
+fn sum_fixed_array(arr: [4]i64) -> i64 {
     mut sum = 0
     mut i = 0
-    // let n = len(arr)
-    let n = 4
+    let n = len(arr)
     for i < n {
         sum += arr[i]
         i += 1
@@ -14,7 +13,7 @@ fn sum_fixed_array(arr: [4]i32) -> i32 {
 
 fn main() {
     println("--- Testing Explicit Typed Array Declarations ---")
-    mut scores: [4]i32 = [10, 25, 40, 50]
+    mut scores: [4]i64 = [10, 25, 40, 50]
 
     println("First element:")
     println(scores[0])

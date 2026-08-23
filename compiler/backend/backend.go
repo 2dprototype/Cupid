@@ -101,6 +101,7 @@ func (b *Backend) Generate() (string, error) {
 	out.WriteString("    mov ecx, -11 ; STD_OUTPUT_HANDLE\n")
 	out.WriteString("    call [GetStdHandle]\n")
 	out.WriteString("    mov [_cupid_stdout], rax\n\n")
+	b.emitGlobalInitializers(&out)
 	out.WriteString("    call cupid_main\n")
 	out.WriteString("    mov ecx, eax\n")
 	out.WriteString("    call [ExitProcess]\n\n")
@@ -126,7 +127,14 @@ func (b *Backend) Generate() (string, error) {
 	out.WriteString("       GetProcessHeap,'GetProcessHeap', \\\n")
 	out.WriteString("       HeapAlloc,'HeapAlloc', \\\n")
 	out.WriteString("       HeapFree,'HeapFree', \\\n")
-	out.WriteString("       Sleep,'Sleep'\n\n")
+	out.WriteString("       Sleep,'Sleep', \\\n")
+	out.WriteString("       CreateThread,'CreateThread', \\\n")
+	out.WriteString("       WaitForSingleObject,'WaitForSingleObject', \\\n")
+	out.WriteString("       CreateSemaphoreA,'CreateSemaphoreA', \\\n")
+	out.WriteString("       ReleaseSemaphore,'ReleaseSemaphore', \\\n")
+	out.WriteString("       CreateMutexA,'CreateMutexA', \\\n")
+	out.WriteString("       ReleaseMutex,'ReleaseMutex', \\\n")
+	out.WriteString("       CloseHandle,'CloseHandle'\n\n")
 	out.WriteString("import msvcrt, \\\n")
 	out.WriteString("       printf,'printf', \\\n")
 	out.WriteString("       sprintf,'sprintf'\n")
@@ -219,6 +227,9 @@ func (b *Backend) formatFasmString(s string) string {
 func (b *Backend) functionLabel(name string) string {
 	if name == "main" {
 		return "cupid_main"
+	}
+	if strings.HasPrefix(name, "_cupid_") {
+		return name
 	}
 	return "cu_" + name
 }
@@ -935,8 +946,19 @@ func (b *Backend) loadOperandToReg(op mir.Operand, reg string, offsets map[int]i
 		} else if intVal, err := parseAnyInteger(val); err == nil {
 			out.WriteString(fmt.Sprintf("    mov %s, %d\n", reg, intVal))
 		} else {
-			// Global or symbol reference
-			out.WriteString(fmt.Sprintf("    mov %s, [global_%s]\n", reg, val))
+			// Global or function symbol reference
+			isFn := false
+			for _, fn := range b.prog.Functions {
+				if fn.Name == val {
+					isFn = true
+					break
+				}
+			}
+			if isFn {
+				out.WriteString(fmt.Sprintf("    lea %s, [%s]\n", reg, b.functionLabel(val)))
+			} else {
+				out.WriteString(fmt.Sprintf("    mov %s, [global_%s]\n", reg, val))
+			}
 		}
 	}
 }
@@ -1529,4 +1551,221 @@ func (b *Backend) emitRuntimeHelpers(out *bytes.Buffer) {
 	out.WriteString("    mov rsp, rbp\n")
 	out.WriteString("    pop rbp\n")
 	out.WriteString("    ret\n\n")
+
+	// _cupid_sleep: RCX = milliseconds
+	out.WriteString("_cupid_sleep:\n")
+	out.WriteString("    push rbp\n")
+	out.WriteString("    mov rbp, rsp\n")
+	out.WriteString("    sub rsp, 32\n")
+	out.WriteString("    call [Sleep]\n")
+	out.WriteString("    mov rsp, rbp\n")
+	out.WriteString("    pop rbp\n")
+	out.WriteString("    ret\n\n")
+
+	// _cupid_go_spawn: RCX = func_ptr, RDX = arg
+	out.WriteString("_cupid_go_spawn:\n")
+	out.WriteString("    push rbp\n")
+	out.WriteString("    mov rbp, rsp\n")
+	out.WriteString("    sub rsp, 48\n")
+	out.WriteString("    mov [rbp - 8], rcx\n")
+	out.WriteString("    mov [rbp - 16], rdx\n")
+	out.WriteString("    xor rcx, rcx\n")
+	out.WriteString("    xor rdx, rdx\n")
+	out.WriteString("    mov r8, [rbp - 8]\n")
+	out.WriteString("    mov r9, [rbp - 16]\n")
+	out.WriteString("    mov qword [rsp + 32], 0\n")
+	out.WriteString("    mov qword [rsp + 40], 0\n")
+	out.WriteString("    call [CreateThread]\n")
+	out.WriteString("    mov rsp, rbp\n")
+	out.WriteString("    pop rbp\n")
+	out.WriteString("    ret\n\n")
+
+	// _cupid_chan_new: RCX = elem_size, RDX = capacity -> RAX = chan_ptr
+	out.WriteString("_cupid_chan_new:\n")
+	out.WriteString("    push rbp\n")
+	out.WriteString("    mov rbp, rsp\n")
+	out.WriteString("    push rbx\n")
+	out.WriteString("    push rsi\n")
+	out.WriteString("    push rdi\n")
+	out.WriteString("    push r12\n")
+	out.WriteString("    sub rsp, 48\n")
+	out.WriteString("    cmp rdx, 0\n")
+	out.WriteString("    jg .ccn_cap_ok\n")
+	out.WriteString("    mov rdx, 16\n")
+	out.WriteString(".ccn_cap_ok:\n")
+	out.WriteString("    cmp rcx, 0\n")
+	out.WriteString("    jg .ccn_size_ok\n")
+	out.WriteString("    mov rcx, 8\n")
+	out.WriteString(".ccn_size_ok:\n")
+	out.WriteString("    mov [rbp - 40], rcx\n")
+	out.WriteString("    mov [rbp - 48], rdx\n")
+	out.WriteString("    mov rax, rcx\n")
+	out.WriteString("    imul rax, rdx\n")
+	out.WriteString("    add rax, 64\n")
+	out.WriteString("    mov rcx, rax\n")
+	out.WriteString("    call _cupid_alloc\n")
+	out.WriteString("    mov rbx, rax\n")
+	out.WriteString("    xor rcx, rcx\n")
+	out.WriteString("    xor rdx, rdx\n")
+	out.WriteString("    xor r8, r8\n")
+	out.WriteString("    xor r9, r9\n")
+	out.WriteString("    call [CreateMutexA]\n")
+	out.WriteString("    mov [rbx], rax\n")
+	out.WriteString("    xor rcx, rcx\n")
+	out.WriteString("    xor rdx, rdx\n")
+	out.WriteString("    mov r8, [rbp - 48]\n")
+	out.WriteString("    xor r9, r9\n")
+	out.WriteString("    call [CreateSemaphoreA]\n")
+	out.WriteString("    mov [rbx + 8], rax\n")
+	out.WriteString("    xor rcx, rcx\n")
+	out.WriteString("    mov rdx, [rbp - 48]\n")
+	out.WriteString("    mov r8, [rbp - 48]\n")
+	out.WriteString("    xor r9, r9\n")
+	out.WriteString("    call [CreateSemaphoreA]\n")
+	out.WriteString("    mov [rbx + 16], rax\n")
+	out.WriteString("    mov rax, [rbp - 48]\n")
+	out.WriteString("    mov [rbx + 24], rax\n")
+	out.WriteString("    mov rax, [rbp - 40]\n")
+	out.WriteString("    mov [rbx + 32], rax\n")
+	out.WriteString("    mov qword [rbx + 40], 0\n")
+	out.WriteString("    mov qword [rbx + 48], 0\n")
+	out.WriteString("    mov qword [rbx + 56], 0\n")
+	out.WriteString("    mov rax, rbx\n")
+	out.WriteString("    add rsp, 48\n")
+	out.WriteString("    pop r12\n")
+	out.WriteString("    pop rdi\n")
+	out.WriteString("    pop rsi\n")
+	out.WriteString("    pop rbx\n")
+	out.WriteString("    mov rsp, rbp\n")
+	out.WriteString("    pop rbp\n")
+	out.WriteString("    ret\n\n")
+
+	// _cupid_chan_send: RCX = chan_ptr, RDX = val
+	out.WriteString("_cupid_chan_send:\n")
+	out.WriteString("    push rbp\n")
+	out.WriteString("    mov rbp, rsp\n")
+	out.WriteString("    push rbx\n")
+	out.WriteString("    push rsi\n")
+	out.WriteString("    push rdi\n")
+	out.WriteString("    push r12\n")
+	out.WriteString("    sub rsp, 48\n")
+	out.WriteString("    mov rbx, rcx\n")
+	out.WriteString("    mov r12, rdx\n")
+	out.WriteString("    mov rcx, [rbx + 16]\n")
+	out.WriteString("    mov rdx, -1\n")
+	out.WriteString("    call [WaitForSingleObject]\n")
+	out.WriteString("    mov rcx, [rbx]\n")
+	out.WriteString("    mov rdx, -1\n")
+	out.WriteString("    call [WaitForSingleObject]\n")
+	out.WriteString("    mov rsi, [rbx + 48]\n")
+	out.WriteString("    mov rax, [rbx + 32]\n")
+	out.WriteString("    imul rsi, rax\n")
+	out.WriteString("    lea rdi, [rbx + 64 + rsi]\n")
+	out.WriteString("    mov [rdi], r12\n")
+	out.WriteString("    mov rax, [rbx + 48]\n")
+	out.WriteString("    inc rax\n")
+	out.WriteString("    xor rdx, rdx\n")
+	out.WriteString("    mov rcx, [rbx + 24]\n")
+	out.WriteString("    div rcx\n")
+	out.WriteString("    mov [rbx + 48], rdx\n")
+	out.WriteString("    inc qword [rbx + 56]\n")
+	out.WriteString("    mov rcx, [rbx]\n")
+	out.WriteString("    call [ReleaseMutex]\n")
+	out.WriteString("    mov rcx, [rbx + 8]\n")
+	out.WriteString("    mov rdx, 1\n")
+	out.WriteString("    xor r8, r8\n")
+	out.WriteString("    call [ReleaseSemaphore]\n")
+	out.WriteString("    add rsp, 48\n")
+	out.WriteString("    pop r12\n")
+	out.WriteString("    pop rdi\n")
+	out.WriteString("    pop rsi\n")
+	out.WriteString("    pop rbx\n")
+	out.WriteString("    mov rsp, rbp\n")
+	out.WriteString("    pop rbp\n")
+	out.WriteString("    ret\n\n")
+
+	// _cupid_chan_recv: RCX = chan_ptr -> RAX = val
+	out.WriteString("_cupid_chan_recv:\n")
+	out.WriteString("    push rbp\n")
+	out.WriteString("    mov rbp, rsp\n")
+	out.WriteString("    push rbx\n")
+	out.WriteString("    push rsi\n")
+	out.WriteString("    push rdi\n")
+	out.WriteString("    push r12\n")
+	out.WriteString("    sub rsp, 48\n")
+	out.WriteString("    mov rbx, rcx\n")
+	out.WriteString("    mov rcx, [rbx + 8]\n")
+	out.WriteString("    mov rdx, -1\n")
+	out.WriteString("    call [WaitForSingleObject]\n")
+	out.WriteString("    mov rcx, [rbx]\n")
+	out.WriteString("    mov rdx, -1\n")
+	out.WriteString("    call [WaitForSingleObject]\n")
+	out.WriteString("    mov rsi, [rbx + 40]\n")
+	out.WriteString("    mov rax, [rbx + 32]\n")
+	out.WriteString("    imul rsi, rax\n")
+	out.WriteString("    lea rdi, [rbx + 64 + rsi]\n")
+	out.WriteString("    mov r12, [rdi]\n")
+	out.WriteString("    mov rax, [rbx + 40]\n")
+	out.WriteString("    inc rax\n")
+	out.WriteString("    xor rdx, rdx\n")
+	out.WriteString("    mov rcx, [rbx + 24]\n")
+	out.WriteString("    div rcx\n")
+	out.WriteString("    mov [rbx + 40], rdx\n")
+	out.WriteString("    dec qword [rbx + 56]\n")
+	out.WriteString("    mov rcx, [rbx]\n")
+	out.WriteString("    call [ReleaseMutex]\n")
+	out.WriteString("    mov rcx, [rbx + 16]\n")
+	out.WriteString("    mov rdx, 1\n")
+	out.WriteString("    xor r8, r8\n")
+	out.WriteString("    call [ReleaseSemaphore]\n")
+	out.WriteString("    mov rax, r12\n")
+	out.WriteString("    add rsp, 48\n")
+	out.WriteString("    pop r12\n")
+	out.WriteString("    pop rdi\n")
+	out.WriteString("    pop rsi\n")
+	out.WriteString("    pop rbx\n")
+	out.WriteString("    mov rsp, rbp\n")
+	out.WriteString("    pop rbp\n")
+	out.WriteString("    ret\n\n")
+}
+
+func (b *Backend) emitGlobalInitializers(out *bytes.Buffer) {
+	for _, g := range b.prog.Globals {
+		if g.Value == nil {
+			continue
+		}
+		b.emitGlobalInitExpr(g.Name, g.Value, out)
+	}
+}
+
+func (b *Backend) emitGlobalInitExpr(globalName string, expr hir.HIRExpr, out *bytes.Buffer) {
+	switch e := expr.(type) {
+	case *hir.HIRLiteral:
+		if e.Typ != nil && e.Typ.Kind == hir.TypeString {
+			cleanVal := strings.Trim(e.Value, "\"")
+			label := b.getStringLabel(cleanVal)
+			out.WriteString(fmt.Sprintf("    lea rax, [%s]\n", label))
+		} else if intVal, err := parseAnyInteger(e.Value); err == nil {
+			out.WriteString(fmt.Sprintf("    mov rax, %d\n", intVal))
+		} else {
+			out.WriteString(fmt.Sprintf("    mov rax, %s\n", e.Value))
+		}
+		out.WriteString(fmt.Sprintf("    mov [global_%s], rax\n", globalName))
+	case *hir.HIRCallExpr:
+		paramRegs := []string{"rcx", "rdx", "r8", "r9"}
+		for i, arg := range e.Args {
+			if i < len(paramRegs) {
+				if lit, ok := arg.(*hir.HIRLiteral); ok {
+					if intVal, err := parseAnyInteger(lit.Value); err == nil {
+						out.WriteString(fmt.Sprintf("    mov %s, %d\n", paramRegs[i], intVal))
+					} else {
+						out.WriteString(fmt.Sprintf("    mov %s, %s\n", paramRegs[i], lit.Value))
+					}
+				}
+			}
+		}
+		targetName := b.functionLabel(e.FuncName)
+		out.WriteString(fmt.Sprintf("    call %s\n", targetName))
+		out.WriteString(fmt.Sprintf("    mov [global_%s], rax\n", globalName))
+	}
 }

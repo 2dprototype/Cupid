@@ -444,6 +444,10 @@ func (l *MIRLowerer) lowerStmt(stmt hir.HIRStmt, ctx *fnContext) {
 		ctx.currBlock.Terminator = &ReturnTerminator{Value: retOp}
 		// Any subsequent statements in this block are unreachable
 		ctx.currBlock = nil
+	case *hir.HIRBlock:
+		for _, nested := range s.Stmts {
+			l.lowerStmt(nested, ctx)
+		}
 	case *hir.HIRExprStmt:
 		l.lowerExpr(s.Expr, ctx)
 	case *hir.HIRIfStmt:

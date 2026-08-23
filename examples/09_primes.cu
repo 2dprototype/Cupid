@@ -1,6 +1,6 @@
 // 09_primes.cu: Prime number test and generation
 
-fn is_prime(n: i32) -> bool {
+fn is_prime(n: i64) -> bool {
     if n <= 1 {
         return false
     }
@@ -21,7 +21,7 @@ fn is_prime(n: i32) -> bool {
     return true
 }
 
-fn print_primes_up_to(limit: i32) {
+fn print_primes_up_to(limit: i64) {
     println("Prime numbers up to limit:")
     mut num = 2
     for num <= limit {
@@ -33,5 +33,5 @@ fn print_primes_up_to(limit: i32) {
 }
 
 fn main() {
-    print_primes_up_to(30)
+    print_primes_up_to(32)
 }

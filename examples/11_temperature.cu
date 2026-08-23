@@ -1,14 +1,14 @@
 // 11_temperature.cu: Temperature scale conversions
 
-fn celsius_to_fahrenheit(celsius: i32) -> i32 {
+fn celsius_to_fahrenheit(celsius: i64) -> i64 {
     return (celsius * 9 / 5) + 32
 }
 
-fn fahrenheit_to_celsius(fahrenheit: i32) -> i32 {
+fn fahrenheit_to_celsius(fahrenheit: i64) -> i64 {
     return (fahrenheit - 32) * 5 / 9
 }
 
-fn celsius_to_kelvin(celsius: i32) -> i32 {
+fn celsius_to_kelvin(celsius: i64) -> i64 {
     return celsius + 273
 }
 

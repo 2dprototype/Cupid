@@ -1,6 +1,6 @@
 // 18_let_immutability.cu: Testing strict immutability (let) vs mutability (mut)
 
-fn mutate_counter(mut counter: i32) -> i32 {
+fn mutate_counter(mut counter: i64) -> i64 {
     counter += 10
     return counter
 }

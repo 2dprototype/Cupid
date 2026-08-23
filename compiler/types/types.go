@@ -290,6 +290,18 @@ func (tc *TypeChecker) typeCheckDecl(decl ast.Decl, mod *modules.Module) {
 				tc.reportError(d.Pos(), fmt.Sprintf("type mismatch in global constant %q: expected %q, got %q", d.Name, expectedType.String(), valType.String()), "E401", len(d.Name))
 			}
 		}
+	case *ast.GlobalVarDecl:
+		var expectedType ast.Type
+		if d.Type != nil {
+			d.Type = tc.resolveAndValidateType(d.Type, mod)
+			expectedType = d.Type
+		}
+		valType := tc.TypeCheckExpr(d.Value, mod)
+		if expectedType != nil && valType != nil {
+			if !tc.checkAssignable(expectedType, d.Value, valType) {
+				tc.reportError(d.Pos(), fmt.Sprintf("type mismatch in global variable %q: expected %q, got %q", d.Name, expectedType.String(), valType.String()), "E401", len(d.Name))
+			}
+		}
 	}
 }
 
@@ -396,6 +408,18 @@ func (tc *TypeChecker) typeCheckStmt(stmt ast.Stmt, expectedRet ast.Type, mod *m
 		tc.typeCheckBlockStmt(s.Block, expectedRet, mod)
 	case *ast.AsmBlock:
 		// inline assembly is untyped
+	case *ast.GoStmt:
+		tc.TypeCheckExpr(s.Call, mod)
+	case *ast.SelectStmt:
+		for _, c := range s.Cases {
+			if c.ChannelOp != nil {
+				tc.TypeCheckExpr(c.ChannelOp, mod)
+			}
+			tc.typeCheckBlockStmt(c.Body, expectedRet, mod)
+		}
+		if s.Default != nil {
+			tc.typeCheckBlockStmt(s.Default, expectedRet, mod)
+		}
 	}
 }
 
@@ -508,7 +532,39 @@ func (tc *TypeChecker) TypeCheckExpr(expr ast.Expr, mod *modules.Module) ast.Typ
 		t = &ast.PrimitiveType{Position: e.Position, Name: "void"}
 	case *ast.QuestionExpr:
 		targetType := tc.TypeCheckExpr(e.Target, mod)
-		t = targetType // simplify for now
+		if targetType != nil {
+			underlying := targetType
+			if ptr, ok := underlying.(*ast.PointerType); ok {
+				underlying = ptr.To
+			}
+			if prim, ok := underlying.(*ast.PrimitiveType); ok {
+				sd := tc.findStructDecl(prim.Name, mod)
+				if sd != nil {
+					for _, f := range sd.Fields {
+						if f.Name == "value" {
+							t = f.Type
+							break
+						}
+					}
+				}
+			} else if gt, ok := underlying.(*ast.GenericType); ok {
+				sd := tc.findStructDecl(gt.BaseName, mod)
+				if sd != nil {
+					spec := tc.monomorphizeStruct(sd, gt.Params, mod)
+					if spec != nil {
+						for _, f := range spec.Fields {
+							if f.Name == "value" {
+								t = f.Type
+								break
+							}
+						}
+					}
+				}
+			}
+		}
+		if t == nil {
+			t = targetType
+		}
 	case *ast.TypeCastExpr:
 		t = tc.typeCheckTypeCastExpr(e, mod)
 	case *ast.TypeofExpr:
@@ -528,7 +584,7 @@ func (tc *TypeChecker) typeCheckIdentExpr(ie *ast.IdentExpr, mod *modules.Module
 	if ie.Name == "_" {
 		return &ast.PrimitiveType{Position: ie.Position, Name: "void"}
 	}
-	if ie.Name == "print" || ie.Name == "println" || ie.Name == "len" || ie.Name == "sizeof" || ie.Name == "alignof" {
+	if ie.Name == "print" || ie.Name == "println" || ie.Name == "len" || ie.Name == "sizeof" || ie.Name == "alignof" || ie.Name == "channel" || ie.Name == "Sleep" || ie.Name == "sleep" {
 		return &ast.PrimitiveType{Position: ie.Position, Name: "fn"}
 	}
 
@@ -551,6 +607,11 @@ func (tc *TypeChecker) typeCheckIdentExpr(ie *ast.IdentExpr, mod *modules.Module
 		// Resolved to a type parameter or type definition
 		return d
 	case *ast.GlobalConstDecl:
+		if d.Type != nil {
+			return d.Type
+		}
+		return tc.TypeCheckExpr(d.Value, mod)
+	case *ast.GlobalVarDecl:
 		if d.Type != nil {
 			return d.Type
 		}
@@ -683,6 +744,12 @@ func (tc *TypeChecker) typeCheckSelectorExpr(se *ast.SelectorExpr, mod *modules.
 		underlying = ptr.To
 	}
 
+	if chanType, ok := underlying.(*ast.ChannelType); ok {
+		if se.Field == "send" || se.Field == "recv" {
+			return chanType.Value
+		}
+	}
+
 	// Resolve the underlying custom type (struct)
 	if prim, ok := underlying.(*ast.PrimitiveType); ok {
 		// Look up struct declaration
@@ -734,6 +801,47 @@ func (tc *TypeChecker) typeCheckCallExpr(ce *ast.CallExpr, mod *modules.Module) 
 			return &ast.PrimitiveType{Position: ce.Position, Name: "i64"}
 		case "sizeof", "alignof":
 			return &ast.PrimitiveType{Position: ce.Position, Name: "i64"}
+		case "channel":
+			var valType ast.Type = &ast.PrimitiveType{Position: ce.Position, Name: "i64"}
+			if len(ce.Generics) > 0 {
+				valType = ce.Generics[0]
+			}
+			return &ast.ChannelType{Position: ce.Position, Value: valType}
+		case "Sleep", "sleep":
+			for _, arg := range ce.Args {
+				tc.TypeCheckExpr(arg, mod)
+			}
+			return &ast.PrimitiveType{Position: ce.Position, Name: "void"}
+		}
+	}
+
+	// Handle channel methods (.send, .recv)
+	if se, ok := ce.Function.(*ast.SelectorExpr); ok {
+		targetType := tc.TypeCheckExpr(se.Target, mod)
+		if targetType != nil {
+			underlying := targetType
+			if ptr, ok := underlying.(*ast.PointerType); ok {
+				underlying = ptr.To
+			}
+			if chanType, ok := underlying.(*ast.ChannelType); ok {
+				if se.Field == "send" {
+					if len(ce.Args) > 0 {
+						tc.TypeCheckExpr(ce.Args[0], mod)
+					}
+					return &ast.PrimitiveType{Position: ce.Position, Name: "void"}
+				} else if se.Field == "recv" {
+					return chanType.Value
+				}
+			} else if prim, ok := underlying.(*ast.PrimitiveType); ok && prim.Name == "channel" {
+				if se.Field == "send" {
+					if len(ce.Args) > 0 {
+						tc.TypeCheckExpr(ce.Args[0], mod)
+					}
+					return &ast.PrimitiveType{Position: ce.Position, Name: "void"}
+				} else if se.Field == "recv" {
+					return &ast.PrimitiveType{Position: ce.Position, Name: "i64"}
+				}
+			}
 		}
 	}
 
@@ -803,6 +911,27 @@ func (tc *TypeChecker) typeCheckCallExpr(ce *ast.CallExpr, mod *modules.Module) 
 
 	// Monomorphize generic function if needed
 	if len(fd.Generics) > 0 {
+		if len(ce.Generics) == 0 && len(ce.Args) > 0 {
+			inferred := make([]ast.Type, len(fd.Generics))
+			for gi, gp := range fd.Generics {
+				for pi, param := range fd.Params {
+					if prim, ok := param.Type.(*ast.PrimitiveType); ok && prim.Name == gp.Name {
+						if pi < len(ce.Args) {
+							argType := tc.TypeCheckExpr(ce.Args[pi], mod)
+							if argType != nil {
+								inferred[gi] = argType
+								break
+							}
+						}
+					}
+				}
+				if inferred[gi] == nil {
+					inferred[gi] = &ast.PrimitiveType{Name: "i64"}
+				}
+			}
+			ce.Generics = inferred
+		}
+
 		if len(ce.Generics) != len(fd.Generics) {
 			tc.reportError(ce.Pos(), fmt.Sprintf("generic parameter count mismatch: expected %d, got %d", len(fd.Generics), len(ce.Generics)), "E409", 1)
 			return nil

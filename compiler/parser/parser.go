@@ -110,6 +110,10 @@ func (p *Parser) parseDecl() ast.Decl {
 		return p.parseTraitDecl(exported)
 	case lexer.CONST:
 		return p.parseGlobalConstDecl(exported)
+	case lexer.LET:
+		return p.parseGlobalVarDecl(exported, false)
+	case lexer.MUT:
+		return p.parseGlobalVarDecl(exported, true)
 	default:
 		diag := diagnostics.Diagnostic{
 			Code:    "E102",
@@ -681,6 +685,38 @@ func (p *Parser) parseGlobalConstDecl(exported bool) *ast.GlobalConstDecl {
 	}
 }
 
+func (p *Parser) parseGlobalVarDecl(exported bool, mutable bool) *ast.GlobalVarDecl {
+	pos := ast.Position{File: p.curToken.File, Line: p.curToken.Line, Col: p.curToken.Col}
+
+	if !p.expectPeek(lexer.IDENT) {
+		return nil
+	}
+	name := p.curToken.Literal
+
+	var ftype ast.Type
+	if p.peekTokenIs(lexer.COLON) {
+		p.nextToken()
+		p.nextToken()
+		ftype = p.parseType()
+	}
+
+	if !p.expectPeek(lexer.ASSIGN) {
+		return nil
+	}
+
+	p.nextToken()
+	val := p.parseExpr(LOWEST)
+
+	return &ast.GlobalVarDecl{
+		Position: pos,
+		Exported: exported,
+		Mutable:  mutable,
+		Name:     name,
+		Type:     ftype,
+		Value:    val,
+	}
+}
+
 // ---------------- Type Parsing ----------------
 
 func (p *Parser) parseType() ast.Type {
@@ -1168,6 +1204,10 @@ func (p *Parser) parsePrefixFn(t lexer.TokenType) prefixParseFn {
 	switch t {
 	case lexer.IDENT:
 		return p.parseIdentExpr
+	case lexer.CHANNEL:
+		return func() ast.Expr {
+			return &ast.IdentExpr{Position: ast.Position{File: p.curToken.File, Line: p.curToken.Line, Col: p.curToken.Col}, Name: "channel"}
+		}
 	case lexer.INT, lexer.FLOAT, lexer.STRING, lexer.CHAR:
 		return p.parseLiteralExpr
 	case lexer.SUB, lexer.NOT, lexer.MUL:

@@ -451,6 +451,17 @@ func (l *Lowerer) lower() *HIRProgram {
 					Type:  gType,
 					Value: val,
 				})
+			case *ast.GlobalVarDecl:
+				gType := l.convertType(d.Type)
+				val := l.lowerExpr(d.Value, mod)
+				if gType == nil && val != nil {
+					gType = val.Type()
+				}
+				prog.Globals = append(prog.Globals, &HIRGlobal{
+					Name:  d.Name,
+					Type:  gType,
+					Value: val,
+				})
 			case *ast.FuncDecl:
 				fn := l.lowerFuncDecl(d, "", mod)
 				prog.Functions = append(prog.Functions, fn)
@@ -533,7 +544,11 @@ func (l *Lowerer) lowerBlock(bs *ast.BlockStmt, mod *modules.Module) *HIRBlock {
 	for _, s := range bs.Stmts {
 		stmt := l.lowerStmt(s, mod)
 		if stmt != nil {
-			block.Stmts = append(block.Stmts, stmt)
+			if b, ok := stmt.(*HIRBlock); ok {
+				block.Stmts = append(block.Stmts, b.Stmts...)
+			} else {
+				block.Stmts = append(block.Stmts, stmt)
+			}
 		}
 	}
 	return block
@@ -631,6 +646,46 @@ func (l *Lowerer) lowerStmt(stmt ast.Stmt, mod *modules.Module) HIRStmt {
 		return l.lowerBlock(s.Block, mod)
 	case *ast.AsmBlock:
 		return &HIRAsmStmt{Assembly: s.RawText}
+	case *ast.GoStmt:
+		callExpr := l.lowerExpr(s.Call, mod).(*HIRCallExpr)
+		var arg HIRExpr = &HIRLiteral{Typ: &HIRType{Kind: TypeI64}, Value: "0"}
+		if len(callExpr.Args) > 0 {
+			arg = callExpr.Args[0]
+		}
+		return &HIRExprStmt{
+			Expr: &HIRCallExpr{
+				FuncName: "_cupid_go_spawn",
+				Args: []HIRExpr{
+					&HIRVar{Name: callExpr.FuncName, Typ: &HIRType{Kind: TypePointer}},
+					arg,
+				},
+				Typ: &HIRType{Kind: TypeVoid},
+			},
+		}
+	case *ast.SelectStmt:
+		stmts := []HIRStmt{}
+		for _, c := range s.Cases {
+			if c.ChannelOp != nil {
+				op := l.lowerExpr(c.ChannelOp, mod)
+				if c.VarName != "" {
+					stmts = append(stmts, &HIRLetStmt{
+						Name:    c.VarName,
+						Mutable: false,
+						Type:    op.Type(),
+						Value:   op,
+					})
+				} else {
+					stmts = append(stmts, &HIRExprStmt{Expr: op})
+				}
+			}
+			if c.Body != nil {
+				stmts = append(stmts, l.lowerBlock(c.Body, mod).Stmts...)
+			}
+		}
+		if s.Default != nil {
+			stmts = append(stmts, l.lowerBlock(s.Default, mod).Stmts...)
+		}
+		return &HIRBlock{Stmts: stmts}
 	case *ast.MatchExpr:
 		target := l.lowerExpr(s.Target, mod)
 		cases := make([]HIRMatchCase, 0, len(s.Cases))
@@ -700,10 +755,59 @@ func (l *Lowerer) lowerExpr(expr ast.Expr, mod *modules.Module) HIRExpr {
 			Typ:   hirType,
 		}
 	case *ast.CallExpr:
+		if ident, ok := e.Function.(*ast.IdentExpr); ok {
+			if ident.Name == "channel" {
+				capacity := "16"
+				if len(e.Args) > 0 {
+					if lit, ok := e.Args[0].(*ast.LiteralExpr); ok {
+						capacity = lit.Value
+					}
+				}
+				return &HIRCallExpr{
+					FuncName: "_cupid_chan_new",
+					Args: []HIRExpr{
+						&HIRLiteral{Typ: &HIRType{Kind: TypeI64, Name: "i64"}, Value: "8"},
+						&HIRLiteral{Typ: &HIRType{Kind: TypeI64, Name: "i64"}, Value: capacity},
+					},
+					Typ: &HIRType{Kind: TypePointer, Name: "channel"},
+				}
+			}
+			if ident.Name == "Sleep" || ident.Name == "sleep" {
+				var arg HIRExpr = &HIRLiteral{Typ: &HIRType{Kind: TypeI64, Name: "i64"}, Value: "0"}
+				if len(e.Args) > 0 {
+					arg = l.lowerExpr(e.Args[0], mod)
+				}
+				return &HIRCallExpr{
+					FuncName: "_cupid_sleep",
+					Args:     []HIRExpr{arg},
+					Typ:      &HIRType{Kind: TypeVoid, Name: "void"},
+				}
+			}
+		}
+
 		funcName := ""
 		args := make([]HIRExpr, 0, len(e.Args))
 		if sel, ok := e.Function.(*ast.SelectorExpr); ok {
 			target := l.lowerExpr(sel.Target, mod)
+			if sel.Field == "send" {
+				var val HIRExpr = &HIRLiteral{Typ: &HIRType{Kind: TypeI64, Name: "i64"}, Value: "0"}
+				if len(e.Args) > 0 {
+					val = l.lowerExpr(e.Args[0], mod)
+				}
+				return &HIRCallExpr{
+					FuncName: "_cupid_chan_send",
+					Args:     []HIRExpr{target, val},
+					Typ:      &HIRType{Kind: TypeVoid, Name: "void"},
+				}
+			}
+			if sel.Field == "recv" {
+				return &HIRCallExpr{
+					FuncName: "_cupid_chan_recv",
+					Args:     []HIRExpr{target},
+					Typ:      hirType,
+				}
+			}
+
 			targetType := target.Type()
 			typeName := ""
 			if targetType != nil {
@@ -889,6 +993,25 @@ func (l *Lowerer) lowerExpr(expr ast.Expr, mod *modules.Module) HIRExpr {
 			Value: val,
 			Typ:   castType,
 		}
+	case *ast.QuestionExpr:
+		target := l.lowerExpr(e.Target, mod)
+		if target.Type() != nil {
+			st := target.Type()
+			if st.Kind == TypePointer && st.ElemType != nil {
+				st = st.ElemType
+			}
+			for _, f := range st.Fields {
+				if f.Name == "value" {
+					return &HIRFieldAccessExpr{
+						Target: target,
+						Field:  "value",
+						Offset: f.Offset,
+						Typ:    f.Type,
+					}
+				}
+			}
+		}
+		return target
 	case *ast.TypeofExpr:
 		// Cupid has no runtime type info: the operand's static type is
 		// known here, at compile time, so typeof folds straight to a
@@ -963,6 +1086,12 @@ func (l *Lowerer) convertType(astType ast.Type) *HIRType {
 			Kind:     TypeArray,
 			ElemType: l.convertType(t.Element),
 			Size:     t.Size,
+		}
+	case *ast.ChannelType:
+		return &HIRType{
+			Kind:     TypePointer,
+			Name:     "channel",
+			ElemType: l.convertType(t.Value),
 		}
 	case *ast.GenericType:
 		return &HIRType{

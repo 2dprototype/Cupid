@@ -102,6 +102,9 @@ func (r *Resolver) resolveModule(mod *modules.Module) {
 		case *ast.GlobalConstDecl:
 			name = d.Name
 			sym = &Symbol{Name: name, Kind: SymConst, DeclNode: d}
+		case *ast.GlobalVarDecl:
+			name = d.Name
+			sym = &Symbol{Name: name, Kind: SymVar, DeclNode: d}
 		}
 
 		if sym != nil {
@@ -138,6 +141,11 @@ func (r *Resolver) resolveDecl(decl ast.Decl, mod *modules.Module, scope *Scope)
 			}
 		}
 	case *ast.GlobalConstDecl:
+		if d.Type != nil {
+			r.resolveType(d.Type, mod, scope)
+		}
+		r.resolveExpr(d.Value, mod, scope)
+	case *ast.GlobalVarDecl:
 		if d.Type != nil {
 			r.resolveType(d.Type, mod, scope)
 		}
@@ -306,6 +314,26 @@ func (r *Resolver) resolveStmt(stmt ast.Stmt, mod *modules.Module, scope *Scope)
 		r.resolveBlockStmt(s.Block, mod, scope)
 	case *ast.AsmBlock:
 		// asm block has no variables/types to resolve
+	case *ast.GoStmt:
+		r.resolveExpr(s.Call, mod, scope)
+	case *ast.SelectStmt:
+		for _, c := range s.Cases {
+			caseScope := NewScope(scope)
+			if c.ChannelOp != nil {
+				r.resolveExpr(c.ChannelOp, mod, caseScope)
+			}
+			if c.VarName != "" {
+				caseScope.Insert(&Symbol{
+					Name:     c.VarName,
+					Kind:     SymVar,
+					DeclNode: s,
+				})
+			}
+			r.resolveBlockStmt(c.Body, mod, caseScope)
+		}
+		if s.Default != nil {
+			r.resolveBlockStmt(s.Default, mod, scope)
+		}
 	}
 }
 
@@ -387,7 +415,7 @@ func (r *Resolver) resolveExpr(expr ast.Expr, mod *modules.Module, scope *Scope)
 func (r *Resolver) resolveIdentExpr(ie *ast.IdentExpr, mod *modules.Module, scope *Scope) {
 	// 0. Built-in functions and literals
 	switch ie.Name {
-	case "print", "println", "len", "sizeof", "alignof", "true", "false", "_":
+	case "print", "println", "len", "sizeof", "alignof", "true", "false", "_", "channel", "Sleep", "sleep":
 		return
 	}
 
@@ -419,6 +447,8 @@ func (r *Resolver) resolveIdentExpr(ie *ast.IdentExpr, mod *modules.Module, scop
 		case *ast.TraitDecl:
 			dName = d.Name
 		case *ast.GlobalConstDecl:
+			dName = d.Name
+		case *ast.GlobalVarDecl:
 			dName = d.Name
 		}
 		if dName == ie.Name {

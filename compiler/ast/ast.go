@@ -419,6 +419,33 @@ func (gc *GlobalConstDecl) String() string {
 }
 func (gc *GlobalConstDecl) declNode() {}
 
+type GlobalVarDecl struct {
+	Position Position
+	Exported bool
+	Mutable  bool
+	Name     string
+	Type     Type // optional
+	Value    Expr
+}
+func (gv *GlobalVarDecl) Pos() Position { return gv.Position }
+func (gv *GlobalVarDecl) String() string {
+	kw := "let"
+	if gv.Mutable {
+		kw = "mut"
+	}
+	var sb strings.Builder
+	if gv.Exported {
+		sb.WriteString("export ")
+	}
+	sb.WriteString(kw + " " + gv.Name)
+	if gv.Type != nil {
+		sb.WriteString(": " + gv.Type.String())
+	}
+	sb.WriteString(" = " + gv.Value.String())
+	return sb.String()
+}
+func (gv *GlobalVarDecl) declNode() {}
+
 // ---------------- Statements ----------------
 
 type LetStmt struct {

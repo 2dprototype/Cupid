@@ -25,10 +25,8 @@ impl Player {
 }
 
 fn main() {
-	unsafe {
-		asm {
-			mov rax, 10
-		}
+	asm {
+		mov rax, 10
 	}
 	mut score = 10
 	match score {
