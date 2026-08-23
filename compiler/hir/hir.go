@@ -940,7 +940,7 @@ func (l *Lowerer) lowerExpr(expr ast.Expr, mod *modules.Module) HIRExpr {
 		var elemType *HIRType
 		if target.Type() != nil {
 			if target.Type().Kind == TypeString {
-				elemType = &HIRType{Kind: TypeU8}
+				elemType = &HIRType{Kind: TypeChar, Name: "char"}
 			} else if target.Type().ElemType != nil {
 				elemType = target.Type().ElemType
 			}

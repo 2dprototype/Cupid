@@ -470,7 +470,7 @@ func (tc *TypeChecker) TypeCheckExpr(expr ast.Expr, mod *modules.Module) ast.Typ
 			if arr, ok := targetType.(*ast.ArrayType); ok {
 				t = arr.Element
 			} else if prim, ok := targetType.(*ast.PrimitiveType); ok && prim.Name == "string" {
-				t = &ast.PrimitiveType{Position: e.Position, Name: "u8"}
+				t = &ast.PrimitiveType{Position: e.Position, Name: "char"}
 			} else if ptr, ok := targetType.(*ast.PointerType); ok {
 				t = ptr.To
 			} else {

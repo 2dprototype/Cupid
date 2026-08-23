@@ -72,6 +72,7 @@ func (b *Backend) Generate() (string, error) {
 	dataBuf.WriteString("    _cupid_fmt_u64 db '%llu', 0\n")
 	dataBuf.WriteString("    _cupid_fmt_f64 db '%f', 0\n")
 	dataBuf.WriteString("    _cupid_fmt_str db '%s', 0\n")
+	dataBuf.WriteString("    _cupid_fmt_bounds_panic db 'panic: string index out of bounds: index %lld, len %lld', 13, 10, 0\n")
 
 	for strVal, label := range b.strTable {
 		escaped := b.formatFasmString(strVal)
@@ -368,10 +369,10 @@ func (b *Backend) generateStatement(stmt mir.Statement, fn *mir.MIRFunction, off
 			out.WriteString(fmt.Sprintf("    mov [rbp - %d], rcx\n", destOffset))
 		case *mir.IndexRvalue:
 			if src.Base.Type != nil && src.Base.Type.Kind == hir.TypeString {
-				b.loadOperandToReg(src.Base, "rax", offsets, out)
-				b.loadOperandToReg(src.Index, "rcx", offsets, out)
-				out.WriteString("    movzx rdx, byte [rax + rcx]\n")
-				out.WriteString(fmt.Sprintf("    mov [rbp - %d], rdx\n", destOffset))
+				b.loadOperandToReg(src.Base, "rcx", offsets, out)
+				b.loadOperandToReg(src.Index, "rdx", offsets, out)
+				out.WriteString("    call _cupid_str_index\n")
+				out.WriteString(fmt.Sprintf("    mov [rbp - %d], rax\n", destOffset))
 				break
 			}
 			b.loadOperandToReg(src.Index, "rcx", offsets, out)
@@ -816,6 +817,9 @@ func (b *Backend) generateCall(call *mir.CallRvalue, destOffset int, offsets map
 			if arg.Type != nil && arg.Type.Kind == hir.TypeString {
 				b.loadOperandToReg(arg, "rcx", offsets, out)
 				out.WriteString("    call _cupid_print_str\n")
+			} else if arg.Type != nil && arg.Type.Kind == hir.TypeChar {
+				b.loadOperandToReg(arg, "rcx", offsets, out)
+				out.WriteString("    call _cupid_print_char\n")
 			} else if arg.Type != nil && arg.Type.Kind == hir.TypeBool {
 				b.loadOperandToReg(arg, "rcx", offsets, out)
 				out.WriteString("    call _cupid_print_bool\n")
@@ -1213,6 +1217,55 @@ func (b *Backend) emitRuntimeHelpers(out *bytes.Buffer) {
 	out.WriteString("    mov rsp, rbp\n")
 	out.WriteString("    pop rbp\n")
 	out.WriteString("    ret\n\n")
+
+	// _cupid_print_char: RCX contains character byte
+	out.WriteString("_cupid_print_char:\n")
+	out.WriteString("    push rbp\n")
+	out.WriteString("    mov rbp, rsp\n")
+	out.WriteString("    sub rsp, 48\n")
+	out.WriteString("    mov [rbp - 8], cl\n")
+	out.WriteString("    mov byte [rbp - 7], 0\n")
+	out.WriteString("    lea rdx, [rbp - 8]\n")
+	out.WriteString("    lea rcx, [_cupid_fmt_str]\n")
+	out.WriteString("    call [printf]\n")
+	out.WriteString("    mov rsp, rbp\n")
+	out.WriteString("    pop rbp\n")
+	out.WriteString("    ret\n\n")
+
+	// _cupid_panic_bounds: RCX = index, RDX = len
+	out.WriteString("_cupid_panic_bounds:\n")
+	out.WriteString("    push rbp\n")
+	out.WriteString("    mov rbp, rsp\n")
+	out.WriteString("    sub rsp, 48\n")
+	out.WriteString("    mov r8, rdx\n")
+	out.WriteString("    mov rdx, rcx\n")
+	out.WriteString("    lea rcx, [_cupid_fmt_bounds_panic]\n")
+	out.WriteString("    call [printf]\n")
+	out.WriteString("    mov ecx, 1\n")
+	out.WriteString("    call [ExitProcess]\n\n")
+
+	// _cupid_str_index: RCX = str, RDX = index -> RAX = char
+	out.WriteString("_cupid_str_index:\n")
+	out.WriteString("    push rbp\n")
+	out.WriteString("    mov rbp, rsp\n")
+	out.WriteString("    sub rsp, 48\n")
+	out.WriteString("    mov [rbp - 8], rcx\n")
+	out.WriteString("    mov [rbp - 16], rdx\n")
+	out.WriteString("    cmp rdx, 0\n")
+	out.WriteString("    jl .csi_bounds_err\n")
+	out.WriteString("    call _cupid_str_len\n")
+	out.WriteString("    mov rdx, [rbp - 16]\n")
+	out.WriteString("    cmp rdx, rax\n")
+	out.WriteString("    jge .csi_bounds_err\n")
+	out.WriteString("    mov rcx, [rbp - 8]\n")
+	out.WriteString("    movzx rax, byte [rcx + rdx]\n")
+	out.WriteString("    mov rsp, rbp\n")
+	out.WriteString("    pop rbp\n")
+	out.WriteString("    ret\n")
+	out.WriteString(".csi_bounds_err:\n")
+	out.WriteString("    mov rcx, [rbp - 16]\n")
+	out.WriteString("    mov rdx, rax\n")
+	out.WriteString("    call _cupid_panic_bounds\n\n")
 
 	// _cupid_print_i64: RCX contains 64-bit integer
 	out.WriteString("_cupid_print_i64:\n")

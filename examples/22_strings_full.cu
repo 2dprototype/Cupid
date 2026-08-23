@@ -40,8 +40,10 @@ fn main() {
     println(len_str)
 
     let byte0 = greeting[0]
-    println("greeting[0] ASCII byte (67 for 'C'):")
+    println("greeting[0] char ('C'):")
     println(byte0)
+    println("greeting[0] as integer code point (67):")
+    println(i64(byte0))
 
     let sub1 = greeting[0:5]
     println("greeting[0:5]:")

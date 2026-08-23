@@ -8,7 +8,7 @@ export fn is_empty(s: string) -> bool {
     return len(s) == 0
 }
 
-export fn char_at(s: string, index: i64) -> u8 {
+export fn char_at(s: string, index: i64) -> char {
     return s[index]
 }
 
@@ -122,11 +122,11 @@ export fn to_upper(s: string) -> string {
     mut i: i64 = 0
     for i < s_len {
         let b = s[i]
-        if b >= 97 && b <= 122 {
-            let up_b = b - 32
-            result = result + string(char(up_b))
+        if b >= 'a' && b <= 'z' {
+            let up_b = char(i64(b) - 32)
+            result = result + string(up_b)
         } else {
-            result = result + string(char(b))
+            result = result + string(b)
         }
         i += 1
     }
@@ -139,11 +139,11 @@ export fn to_lower(s: string) -> string {
     mut i: i64 = 0
     for i < s_len {
         let b = s[i]
-        if b >= 65 && b <= 90 {
-            let low_b = b + 32
-            result = result + string(char(low_b))
+        if b >= 'A' && b <= 'Z' {
+            let low_b = char(i64(b) + 32)
+            result = result + string(low_b)
         } else {
-            result = result + string(char(b))
+            result = result + string(b)
         }
         i += 1
     }
@@ -178,7 +178,7 @@ export fn trim_space(s: string) -> string {
     mut start: i64 = 0
     for start < s_len {
         let b = s[start]
-        if b != 32 && b != 9 && b != 10 && b != 13 {
+        if b != ' ' && b != '\t' && b != '\n' && b != '\r' {
             break
         }
         start += 1
@@ -186,7 +186,7 @@ export fn trim_space(s: string) -> string {
     mut end: i64 = s_len
     for end > start {
         let b = s[end - 1]
-        if b != 32 && b != 9 && b != 10 && b != 13 {
+        if b != ' ' && b != '\t' && b != '\n' && b != '\r' {
             break
         }
         end -= 1
