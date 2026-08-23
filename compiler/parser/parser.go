@@ -295,14 +295,7 @@ func (p *Parser) parseFuncDecl(exported bool) *ast.FuncDecl {
 			}
 		}
 
-		if p.curTokenIs(lexer.IDENT) && p.curToken.Literal == "self" {
-			pname = "self"
-			if isMut {
-				ptype = &ast.PointerType{Position: pos, To: &ast.PrimitiveType{Position: pos, Name: "self"}, Mutable: true}
-			} else {
-				ptype = &ast.PrimitiveType{Position: pos, Name: "self"}
-			}
-		} else if p.curTokenIs(lexer.IDENT) {
+		if p.curTokenIs(lexer.IDENT) {
 			pname = p.curToken.Literal
 			if !p.expectPeek(lexer.COLON) {
 				return nil
@@ -562,9 +555,9 @@ func (p *Parser) parseTraitDecl(exported bool) *ast.TraitDecl {
 	var generics []ast.GenericParam
 
 	if p.peekTokenIs(lexer.LT) {
+		p.nextToken() // consume '<'
 		p.nextToken()
 		for !p.curTokenIs(lexer.GT) && !p.curTokenIs(lexer.EOF) {
-			p.nextToken()
 			if p.curTokenIs(lexer.CHAR) {
 				lifetimes = append(lifetimes, p.curToken.Literal)
 			} else if p.curTokenIs(lexer.IDENT) {
@@ -589,8 +582,11 @@ func (p *Parser) parseTraitDecl(exported bool) *ast.TraitDecl {
 			if p.peekTokenIs(lexer.COMMA) {
 				p.nextToken()
 			}
+			p.nextToken()
 		}
-		p.expectPeek(lexer.GT)
+		if !p.curTokenIs(lexer.GT) {
+			return nil
+		}
 	}
 
 	if !p.expectPeek(lexer.LBRACE) {
@@ -613,15 +609,11 @@ func (p *Parser) parseTraitDecl(exported bool) *ast.TraitDecl {
 				p.nextToken()
 				pname := p.curToken.Literal
 				var ptype ast.Type
-				if pname == "self" {
-					ptype = &ast.PrimitiveType{Position: pos, Name: "self"}
-				} else {
-					if !p.expectPeek(lexer.COLON) {
-						return nil
-					}
-					p.nextToken()
-					ptype = p.parseType()
+				if !p.expectPeek(lexer.COLON) {
+					return nil
 				}
+				p.nextToken()
+				ptype = p.parseType()
 				params = append(params, ast.Param{Name: pname, Type: ptype})
 				if p.peekTokenIs(lexer.COMMA) {
 					p.nextToken()

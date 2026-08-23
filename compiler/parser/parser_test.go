@@ -18,10 +18,8 @@ fn add(a: i32, b: i32) -> i32 {
 	return x
 }
 
-impl Player {
-	fn damage(mut self, amount: i32) {
-		self.hp -= amount
-	}
+fn (p: &mut Player) damage(amount: i32) {
+	p.hp -= amount
 }
 
 fn main() {

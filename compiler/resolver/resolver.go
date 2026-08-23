@@ -129,17 +129,7 @@ func (r *Resolver) resolveDecl(decl ast.Decl, mod *modules.Module, scope *Scope)
 	case *ast.StructDecl:
 		r.resolveStructDecl(d, mod, scope)
 	case *ast.TraitDecl:
-		// Trait method signatures only have types, but they might have parameters
-		for _, m := range d.Methods {
-			funcScope := NewScope(scope)
-			// Add generics/lifetimes if any?
-			for _, p := range m.Params {
-				r.resolveType(p.Type, mod, funcScope)
-			}
-			if m.ReturnType != nil {
-				r.resolveType(m.ReturnType, mod, funcScope)
-			}
-		}
+		r.resolveTraitDecl(d, mod, scope)
 	case *ast.GlobalConstDecl:
 		if d.Type != nil {
 			r.resolveType(d.Type, mod, scope)
@@ -192,13 +182,6 @@ func (r *Resolver) resolveFuncDecl(fd *ast.FuncDecl, mod *modules.Module, parent
 			DeclNode: p,
 			IsMut:    p.Mutable,
 		}
-		if p.Name == "self" {
-			// self is special, check if it's mutable
-			if _, ok := p.Type.(*ast.PointerType); ok {
-				sym.IsMut = true
-				p.Mutable = true
-			}
-		}
 		funcScope.Insert(sym)
 		r.Resolutions[p] = p
 	}
@@ -226,20 +209,7 @@ func (r *Resolver) resolveImplDecl(id *ast.ImplDecl, mod *modules.Module, parent
 
 	r.resolveType(id.Target, mod, implScope)
 
-	// Add "self" and "Self" pointing to id.Target
-	implScope.Insert(&Symbol{
-		Name:     "self",
-		Kind:     SymTypeVar,
-		DeclNode: id.Target,
-	})
-	implScope.Insert(&Symbol{
-		Name:     "Self",
-		Kind:     SymTypeVar,
-		DeclNode: id.Target,
-	})
-
 	for _, m := range id.Methods {
-		// Methods inside impl can reference target self and its lifetimes
 		r.resolveFuncDecl(m, mod, implScope)
 	}
 }
@@ -256,6 +226,27 @@ func (r *Resolver) resolveStructDecl(sd *ast.StructDecl, mod *modules.Module, pa
 
 	for _, f := range sd.Fields {
 		r.resolveType(f.Type, mod, structScope)
+	}
+}
+
+func (r *Resolver) resolveTraitDecl(td *ast.TraitDecl, mod *modules.Module, parentScope *Scope) {
+	traitScope := NewScope(parentScope)
+	for _, gp := range td.Generics {
+		traitScope.Insert(&Symbol{
+			Name:     gp.Name,
+			Kind:     SymTypeVar,
+			DeclNode: td,
+		})
+	}
+
+	for _, m := range td.Methods {
+		funcScope := NewScope(traitScope)
+		for _, p := range m.Params {
+			r.resolveType(p.Type, mod, funcScope)
+		}
+		if m.ReturnType != nil {
+			r.resolveType(m.ReturnType, mod, funcScope)
+		}
 	}
 }
 
@@ -478,7 +469,7 @@ func (r *Resolver) resolveType(t ast.Type, mod *modules.Module, scope *Scope) {
 		switch pt.Name {
 		case "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64",
 			"int", "uint", "usize", "isize",
-			"f32", "f64", "bool", "string", "char", "void", "self", "Self":
+			"f32", "f64", "bool", "string", "char", "void":
 			return
 		}
 

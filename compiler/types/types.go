@@ -876,7 +876,6 @@ func (tc *TypeChecker) typeCheckCallExpr(ce *ast.CallExpr, mod *modules.Module) 
 		fd, _ = decl.(*ast.FuncDecl)
 	}
 
-	isMethodCall := false
 	if fd == nil {
 		// Might be a selector expression (module.func or struct.method)
 		if se, ok := ce.Function.(*ast.SelectorExpr); ok {
@@ -901,7 +900,6 @@ func (tc *TypeChecker) typeCheckCallExpr(ce *ast.CallExpr, mod *modules.Module) 
 								if recName == typeName && funcDecl.Name == se.Field {
 									fd = funcDecl
 									tc.resolutions[se] = fd
-									isMethodCall = true
 									break
 								}
 							} else if id, ok := decl.(*ast.ImplDecl); ok && id.Target.String() == typeName {
@@ -909,7 +907,6 @@ func (tc *TypeChecker) typeCheckCallExpr(ce *ast.CallExpr, mod *modules.Module) 
 									if method.Name == se.Field {
 										fd = method
 										tc.resolutions[se] = fd
-										isMethodCall = true
 										break
 									}
 								}
@@ -971,19 +968,14 @@ func (tc *TypeChecker) typeCheckCallExpr(ce *ast.CallExpr, mod *modules.Module) 
 	}
 
 	// Validate arguments
-	paramStart := 0
-	if isMethodCall && fd.Receiver == nil && len(fd.Params) > 0 && fd.Params[0].Name == "self" {
-		paramStart = 1
-	}
-
-	expectedArgs := len(fd.Params) - paramStart
+	expectedArgs := len(fd.Params)
 	if len(ce.Args) != expectedArgs {
 		tc.reportError(ce.Pos(), fmt.Sprintf("argument count mismatch: expected %d, got %d", expectedArgs, len(ce.Args)), "E410", 1)
 		return nil
 	}
 
 	for i, arg := range ce.Args {
-		paramType := fd.Params[i+paramStart].Type
+		paramType := fd.Params[i].Type
 		argType := tc.TypeCheckExpr(arg, mod)
 		if argType != nil && !tc.checkAssignable(paramType, arg, argType) {
 			tc.reportError(arg.Pos(), fmt.Sprintf("argument type mismatch: expected %q, got %q", paramType.String(), argType.String()), "E401", len(arg.String()))
@@ -1056,7 +1048,7 @@ func (tc *TypeChecker) resolveAndValidateType(t ast.Type, mod *modules.Module) a
 		switch pt.Name {
 		case "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64",
 			"int", "uint", "usize", "isize",
-			"f32", "f64", "bool", "string", "char", "void", "self", "Self":
+			"f32", "f64", "bool", "string", "char", "void":
 			return pt
 		}
 		// If in resolutions, it is resolved

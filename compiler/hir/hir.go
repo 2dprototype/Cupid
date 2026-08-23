@@ -508,15 +508,6 @@ func (l *Lowerer) lowerFuncDecl(fd *ast.FuncDecl, prefix string, mod *modules.Mo
 	}
 	for _, p := range fd.Params {
 		pType := l.convertType(p.Type)
-		if p.Name == "self" && targetStructName != "" {
-			if st, ok := l.structTypes[targetStructName]; ok {
-				if pType != nil && pType.Kind == TypePointer {
-					pType.ElemType = st
-				} else {
-					pType = st
-				}
-			}
-		}
 		params = append(params, HIRParam{
 			Name: p.Name,
 			Type: pType,
