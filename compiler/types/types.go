@@ -52,10 +52,10 @@ func isFloatType(t ast.Type) bool {
     return false
 }
 
-func parseAnyInteger(s string) (int64, error) {
+func parseAnyUnsignedInteger(s string) (uint64, bool, error) {
 	s = strings.ReplaceAll(s, "_", "")
 	if s == "" {
-		return 0, fmt.Errorf("empty string")
+		return 0, false, fmt.Errorf("empty string")
 	}
 	neg := false
 	if strings.HasPrefix(s, "-") {
@@ -77,12 +77,9 @@ func parseAnyInteger(s string) (int64, error) {
 		val, err = strconv.ParseUint(s, 10, 64)
 	}
 	if err != nil {
-		return 0, err
+		return 0, false, err
 	}
-	if neg {
-		return -int64(val), nil
-	}
-	return int64(val), nil
+	return val, neg, nil
 }
 
 // literalFitsInType checks whether a literal integer or float can be assigned to target type.
@@ -90,31 +87,48 @@ func parseAnyInteger(s string) (int64, error) {
 // For floats, any finite literal is accepted (precision loss for f32 is allowed).
 func literalFitsInType(lit *ast.LiteralExpr, target ast.Type) bool {
 	if lit.Type == lexer.INT {
-		val, err := parseAnyInteger(lit.Value)
+		uval, isNeg, err := parseAnyUnsignedInteger(lit.Value)
 		if err != nil {
 			return false
 		}
 		if prim, ok := target.(*ast.PrimitiveType); ok {
 			name := canonicalTypeName(prim.Name)
-			switch name {
-			case "i8":
-				return val >= -128 && val <= 127
-			case "i16":
-				return val >= -32768 && val <= 32767
-			case "i32":
-				return val >= -2147483648 && val <= 2147483647
-			case "i64":
-				return true
-			case "u8":
-				return val >= 0 && val <= 255
-			case "u16":
-				return val >= 0 && val <= 65535
-			case "u32":
-				return val >= 0 && val <= 4294967295
-			case "u64":
-				return val >= 0
-			case "f32", "f64":
-				return true
+			if isNeg {
+				switch name {
+				case "u8", "u16", "u32", "u64":
+					return false
+				case "i8":
+					return uval <= 128
+				case "i16":
+					return uval <= 32768
+				case "i32":
+					return uval <= 2147483648
+				case "i64":
+					return uval <= 9223372036854775808
+				case "f32", "f64":
+					return true
+				}
+			} else {
+				switch name {
+				case "i8":
+					return uval <= 127
+				case "i16":
+					return uval <= 32767
+				case "i32":
+					return uval <= 2147483647
+				case "i64":
+					return uval <= 9223372036854775807
+				case "u8":
+					return uval <= 255
+				case "u16":
+					return uval <= 65535
+				case "u32":
+					return uval <= 4294967295
+				case "u64":
+					return true
+				case "f32", "f64":
+					return true
+				}
 			}
 		}
 		return false
