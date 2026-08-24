@@ -112,8 +112,10 @@ func (t *HIRType) ByteSize() int {
 		return 2
 	case TypeChar, TypeI32, TypeU32, TypeF32:
 		return 4
-	case TypeI64, TypeU64, TypeF64, TypePointer, TypeString:
+	case TypeI64, TypeU64, TypeF64, TypePointer:
 		return 8
+	case TypeString:
+		return 16 // string: ptr + len
 	case TypeArray:
 		if t.Size <= 0 {
 			return 16 // slice: ptr + len

@@ -20,7 +20,8 @@ fn withdraw(mut acc: BankAccount, amount: i32) -> BankAccount {
         acc.balance -= amount
         println("Withdrew amount:")
         println(amount)
-    } else {
+    } 
+    else {
         println("Insufficient funds or invalid account.")
     }
     return acc

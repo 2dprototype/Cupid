@@ -83,6 +83,7 @@ func (b *Backend) Generate() (string, error) {
 		escaped := b.formatFasmString(strVal)
 		dataBuf.WriteString(fmt.Sprintf("    %s db %s, 0\n", label, escaped))
 		dataBuf.WriteString(fmt.Sprintf("    %s_len dq %d\n", label, len(strVal)))
+		dataBuf.WriteString(fmt.Sprintf("    %s_hdr dq %s, %d\n", label, label, len(strVal)))
 	}
 
 	// Globals
@@ -271,7 +272,7 @@ func (b *Backend) generateFunction(fn *mir.MIRFunction, out *bytes.Buffer) {
 	paramRegs := []string{"rcx", "rdx", "r8", "r9"}
 	for i, param := range fn.Params {
 		offset := offsets[param.ID]
-		if param.Type != nil && (param.Type.Kind == hir.TypeStruct || param.Type.Kind == hir.TypeArray) && param.Type.ByteSize() > 8 {
+		if param.Type != nil && param.Type.ByteSize() > 8 {
 			if i < len(paramRegs) {
 				reg := paramRegs[i]
 				numWords := (param.Type.ByteSize() + 7) / 8
@@ -313,7 +314,7 @@ func (b *Backend) calculateLocalOffsets(fn *mir.MIRFunction) (map[int]int, int) 
 	currentOffset := 0
 	for _, l := range fn.Locals {
 		sz := 8
-		if l.Type != nil && (l.Type.Kind == hir.TypeStruct || l.Type.Kind == hir.TypeArray) {
+		if l.Type != nil {
 			sz = l.Type.ByteSize()
 			if sz < 8 {
 				sz = 8
@@ -334,12 +335,20 @@ func (b *Backend) generateStatement(stmt mir.Statement, fn *mir.MIRFunction, off
 		destOffset := offsets[s.Dest.ID]
 		switch src := s.Src.(type) {
 		case *mir.UseRvalue:
-			if s.Dest.Type != nil && (s.Dest.Type.Kind == hir.TypeStruct || s.Dest.Type.Kind == hir.TypeArray) && s.Dest.Type.ByteSize() > 8 && src.Op.Kind == mir.OpLocal {
-				srcOffset := offsets[src.Op.LocalID]
-				numWords := (s.Dest.Type.ByteSize() + 7) / 8
-				for w := 0; w < numWords; w++ {
-					out.WriteString(fmt.Sprintf("    mov rax, [rbp - %d + %d]\n", srcOffset, w*8))
-					out.WriteString(fmt.Sprintf("    mov [rbp - %d + %d], rax\n", destOffset, w*8))
+			if s.Dest.Type != nil && s.Dest.Type.ByteSize() > 8 {
+				if src.Op.Kind == mir.OpLocal {
+					srcOffset := offsets[src.Op.LocalID]
+					numWords := (s.Dest.Type.ByteSize() + 7) / 8
+					for w := 0; w < numWords; w++ {
+						out.WriteString(fmt.Sprintf("    mov rax, [rbp - %d + %d]\n", srcOffset, w*8))
+						out.WriteString(fmt.Sprintf("    mov [rbp - %d + %d], rax\n", destOffset, w*8))
+					}
+				} else if src.Op.Kind == mir.OpConst && s.Dest.Type.Kind == hir.TypeString {
+					cleanVal := strings.Trim(src.Op.Constant, "\"")
+					label := b.getStringLabel(cleanVal)
+					out.WriteString(fmt.Sprintf("    lea rax, [%s]\n", label))
+					out.WriteString(fmt.Sprintf("    mov [rbp - %d], rax\n", destOffset))
+					out.WriteString(fmt.Sprintf("    mov qword [rbp - %d + 8], %d\n", destOffset, len(cleanVal)))
 				}
 			} else {
 				b.loadOperandToReg(src.Op, "rax", offsets, out)
@@ -384,9 +393,10 @@ func (b *Backend) generateStatement(stmt mir.Statement, fn *mir.MIRFunction, off
 			out.WriteString(fmt.Sprintf("    mov [rbp - %d], rcx\n", destOffset))
 		case *mir.IndexRvalue:
 			if src.Base.Type != nil && src.Base.Type.Kind == hir.TypeString {
-				b.loadOperandToReg(src.Base, "rcx", offsets, out)
-				b.loadOperandToReg(src.Index, "rdx", offsets, out)
-				out.WriteString("    call _cupid_str_index\n")
+				baseOffset := offsets[src.Base.LocalID]
+				b.loadOperandToReg(src.Index, "rcx", offsets, out)
+				out.WriteString("    mov rax, [rbp - " + fmt.Sprintf("%d", baseOffset) + "]\n")
+				out.WriteString("    movzx rax, byte [rax + rcx]\n")
 				out.WriteString(fmt.Sprintf("    mov [rbp - %d], rax\n", destOffset))
 				break
 			}
@@ -394,7 +404,7 @@ func (b *Backend) generateStatement(stmt mir.Statement, fn *mir.MIRFunction, off
 			b.emitElemScaledIndex("rcx", src.Type, out)
 			if src.Base.Kind == mir.OpLocal {
 				baseOffset := offsets[src.Base.LocalID]
-				if src.Base.Type != nil && (src.Base.Type.Kind == hir.TypePointer || (src.Base.Type.Kind == hir.TypeArray && src.Base.Type.Size == 0)) {
+				if src.Base.Type != nil && (src.Base.Type.Kind == hir.TypePointer || (src.Base.Type.Kind == hir.TypeArray && src.Base.Type.Size <= 0)) {
 					out.WriteString(fmt.Sprintf("    mov rax, [rbp - %d]\n", baseOffset))
 				} else {
 					out.WriteString(fmt.Sprintf("    mov rax, rbp\n"))
@@ -431,34 +441,59 @@ func (b *Backend) generateStatement(stmt mir.Statement, fn *mir.MIRFunction, off
 			}
 		case *mir.SliceRvalue:
 			if (src.Type != nil && src.Type.Kind == hir.TypeString) || (src.Base.Type != nil && src.Base.Type.Kind == hir.TypeString) {
-				b.loadOperandToReg(src.Base, "rcx", offsets, out)
-				if src.Low != nil {
-					b.loadOperandToReg(*src.Low, "rdx", offsets, out)
-				} else {
-					out.WriteString("    xor rdx, rdx\n")
+				if src.Base.Kind == mir.OpLocal {
+					baseOffset := offsets[src.Base.LocalID]
+					out.WriteString(fmt.Sprintf("    mov rax, [rbp - %d]\n", baseOffset))
+					if src.Low != nil {
+						b.loadOperandToReg(*src.Low, "rdx", offsets, out)
+					} else {
+						out.WriteString("    xor rdx, rdx\n")
+					}
+					if src.High != nil {
+						b.loadOperandToReg(*src.High, "r8", offsets, out)
+					} else {
+						out.WriteString(fmt.Sprintf("    mov r8, [rbp - %d + 8]\n", baseOffset))
+					}
+					out.WriteString("    add rax, rdx\n")
+					out.WriteString("    sub r8, rdx\n")
+					out.WriteString(fmt.Sprintf("    mov [rbp - %d], rax\n", destOffset))
+					out.WriteString(fmt.Sprintf("    mov [rbp - %d + 8], r8\n", destOffset))
 				}
-				if src.High != nil {
-					b.loadOperandToReg(*src.High, "r8", offsets, out)
-				} else {
-					out.WriteString("    mov r8, -1\n")
-				}
-				out.WriteString("    call _cupid_str_slice\n")
-				out.WriteString(fmt.Sprintf("    mov [rbp - %d], rax\n", destOffset))
 			} else if src.Base.Type != nil && src.Base.Type.Kind == hir.TypeArray {
 				if src.Base.Kind == mir.OpLocal {
 					baseOffset := offsets[src.Base.LocalID]
-					if src.Base.Type.Size == 0 {
+					elemSize := 8
+					if src.Base.Type.ElemType != nil {
+						elemSize = src.Base.Type.ElemType.ByteSize()
+					}
+					if src.Base.Type.Size <= 0 {
 						out.WriteString(fmt.Sprintf("    mov rax, [rbp - %d]\n", baseOffset))
+						if src.High != nil {
+							b.loadOperandToReg(*src.High, "r8", offsets, out)
+						} else {
+							out.WriteString(fmt.Sprintf("    mov r8, [rbp - %d + 8]\n", baseOffset))
+						}
 					} else {
 						out.WriteString(fmt.Sprintf("    mov rax, rbp\n"))
 						out.WriteString(fmt.Sprintf("    sub rax, %d\n", baseOffset))
+						if src.High != nil {
+							b.loadOperandToReg(*src.High, "r8", offsets, out)
+						} else {
+							out.WriteString(fmt.Sprintf("    mov r8, %d\n", src.Base.Type.Size))
+						}
 					}
 					if src.Low != nil {
-						b.loadOperandToReg(*src.Low, "rcx", offsets, out)
-						b.emitElemScaledIndex("rcx", src.Base.Type.ElemType, out)
-						out.WriteString("    add rax, rcx\n")
+						b.loadOperandToReg(*src.Low, "rdx", offsets, out)
+					} else {
+						out.WriteString("    xor rdx, rdx\n")
 					}
+					out.WriteString("    sub r8, rdx\n")
+					if elemSize > 1 {
+						out.WriteString(fmt.Sprintf("    imul rdx, %d\n", elemSize))
+					}
+					out.WriteString("    add rax, rdx\n")
 					out.WriteString(fmt.Sprintf("    mov [rbp - %d], rax\n", destOffset))
+					out.WriteString(fmt.Sprintf("    mov [rbp - %d + 8], r8\n", destOffset))
 				}
 			}
 		case *mir.RefRvalue:
@@ -700,18 +735,37 @@ func (b *Backend) generateBinary(bin *mir.BinaryRvalue, destOffset int, offsets 
 		(bin.Right.Type != nil && bin.Right.Type.Kind == hir.TypeString)
 
 	if isString {
-		b.loadOperandToReg(bin.Left, "rcx", offsets, out)
-		b.loadOperandToReg(bin.Right, "rdx", offsets, out)
+		if bin.Left.Kind == mir.OpLocal {
+			leftOffset := offsets[bin.Left.LocalID]
+			out.WriteString(fmt.Sprintf("    mov rcx, [rbp - %d]\n", leftOffset))
+			out.WriteString(fmt.Sprintf("    mov rdx, [rbp - %d + 8]\n", leftOffset))
+		} else {
+			b.loadOperandToReg(bin.Left, "rcx", offsets, out)
+			cleanVal := strings.Trim(bin.Left.Constant, "\"")
+			out.WriteString(fmt.Sprintf("    mov rdx, %d\n", len(cleanVal)))
+		}
+		if bin.Right.Kind == mir.OpLocal {
+			rightOffset := offsets[bin.Right.LocalID]
+			out.WriteString(fmt.Sprintf("    mov r8, [rbp - %d]\n", rightOffset))
+			out.WriteString(fmt.Sprintf("    mov r9, [rbp - %d + 8]\n", rightOffset))
+		} else {
+			b.loadOperandToReg(bin.Right, "r8", offsets, out)
+			cleanVal := strings.Trim(bin.Right.Constant, "\"")
+			out.WriteString(fmt.Sprintf("    mov r9, %d\n", len(cleanVal)))
+		}
 		switch bin.Op {
 		case "+":
-			out.WriteString("    call _cupid_str_concat\n")
+			out.WriteString("    call _cupid_str_concat_slice\n")
+			out.WriteString(fmt.Sprintf("    mov [rbp - %d], rax\n", destOffset))
+			out.WriteString(fmt.Sprintf("    mov [rbp - %d + 8], rdx\n", destOffset))
 		case "==":
-			out.WriteString("    call _cupid_str_eq\n")
+			out.WriteString("    call _cupid_str_eq_slice\n")
+			out.WriteString(fmt.Sprintf("    mov [rbp - %d], rax\n", destOffset))
 		case "!=":
-			out.WriteString("    call _cupid_str_eq\n")
+			out.WriteString("    call _cupid_str_eq_slice\n")
 			out.WriteString("    xor rax, 1\n")
+			out.WriteString(fmt.Sprintf("    mov [rbp - %d], rax\n", destOffset))
 		}
-		out.WriteString(fmt.Sprintf("    mov [rbp - %d], rax\n", destOffset))
 		return
 	}
 
@@ -813,13 +867,21 @@ func (b *Backend) generateCall(call *mir.CallRvalue, destOffset int, offsets map
 	// Handle built-ins: print, println, len
 	if call.FuncName == "len" {
 		if len(call.Args) > 0 && call.Args[0].Type != nil {
-			if call.Args[0].Type.Kind == hir.TypeArray {
-				out.WriteString(fmt.Sprintf("    mov rax, %d\n", call.Args[0].Type.Size))
+			arg := call.Args[0]
+			if arg.Type.Kind == hir.TypeArray && arg.Type.Size > 0 {
+				out.WriteString(fmt.Sprintf("    mov rax, %d\n", arg.Type.Size))
 				out.WriteString(fmt.Sprintf("    mov [rbp - %d], rax\n", destOffset))
 				return
-			} else if call.Args[0].Type.Kind == hir.TypeString {
-				b.loadOperandToReg(call.Args[0], "rcx", offsets, out)
-				out.WriteString("    call _cupid_str_len\n")
+			} else if (arg.Type.Kind == hir.TypeArray && arg.Type.Size <= 0) || arg.Type.Kind == hir.TypeString {
+				if arg.Kind == mir.OpLocal {
+					argOffset := offsets[arg.LocalID]
+					out.WriteString(fmt.Sprintf("    mov rax, [rbp - %d + 8]\n", argOffset))
+					out.WriteString(fmt.Sprintf("    mov [rbp - %d], rax\n", destOffset))
+					return
+				}
+			} else if arg.Type.Kind == hir.TypePointer && arg.Type.ElemType != nil && (arg.Type.ElemType.Kind == hir.TypeString || (arg.Type.ElemType.Kind == hir.TypeArray && arg.Type.ElemType.Size <= 0)) {
+				b.loadOperandToReg(arg, "rax", offsets, out)
+				out.WriteString("    mov rax, [rax + 8]\n")
 				out.WriteString(fmt.Sprintf("    mov [rbp - %d], rax\n", destOffset))
 				return
 			}
@@ -830,8 +892,16 @@ func (b *Backend) generateCall(call *mir.CallRvalue, destOffset int, offsets map
 		if len(call.Args) > 0 {
 			arg := call.Args[0]
 			if arg.Type != nil && arg.Type.Kind == hir.TypeString {
-				b.loadOperandToReg(arg, "rcx", offsets, out)
-				out.WriteString("    call _cupid_print_str\n")
+				if arg.Kind == mir.OpLocal {
+					argOffset := offsets[arg.LocalID]
+					out.WriteString(fmt.Sprintf("    mov rcx, [rbp - %d]\n", argOffset))
+					out.WriteString(fmt.Sprintf("    mov rdx, [rbp - %d + 8]\n", argOffset))
+				} else {
+					b.loadOperandToReg(arg, "rcx", offsets, out)
+					cleanVal := strings.Trim(arg.Constant, "\"")
+					out.WriteString(fmt.Sprintf("    mov rdx, %d\n", len(cleanVal)))
+				}
+				out.WriteString("    call _cupid_print_str_len\n")
 			} else if arg.Type != nil && arg.Type.Kind == hir.TypeChar {
 				b.loadOperandToReg(arg, "rcx", offsets, out)
 				out.WriteString("    call _cupid_print_char\n")
@@ -869,7 +939,7 @@ func (b *Backend) generateCall(call *mir.CallRvalue, destOffset int, offsets map
 				} else {
 					out.WriteString(fmt.Sprintf("    movq %s, %s\n", paramRegs[i], xmmReg))
 				}
-			} else if arg.Type != nil && (arg.Type.Kind == hir.TypeStruct || arg.Type.Kind == hir.TypeArray) && arg.Type.ByteSize() > 8 && arg.Kind == mir.OpLocal {
+			} else if arg.Type != nil && arg.Type.ByteSize() > 8 && arg.Kind == mir.OpLocal {
 				argOffset := offsets[arg.LocalID]
 				out.WriteString(fmt.Sprintf("    lea %s, [rbp - %d]\n", paramRegs[i], argOffset))
 			} else {
@@ -886,7 +956,7 @@ func (b *Backend) generateCall(call *mir.CallRvalue, destOffset int, offsets map
 	out.WriteString(fmt.Sprintf("    call %s\n", targetName))
 	if call.Type != nil && isFloatKind(call.Type.Kind) {
 		b.storeXMMToLocal("xmm0", call.Type.Kind, destOffset, out)
-	} else if call.Type != nil && (call.Type.Kind == hir.TypeStruct || call.Type.Kind == hir.TypeArray) && call.Type.ByteSize() > 8 {
+	} else if call.Type != nil && call.Type.ByteSize() > 8 {
 		numWords := (call.Type.ByteSize() + 7) / 8
 		for w := 0; w < numWords; w++ {
 			out.WriteString(fmt.Sprintf("    mov rcx, [rax + %d]\n", w*8))
@@ -981,7 +1051,7 @@ func (b *Backend) generateTerminator(term mir.Terminator, fn *mir.MIRFunction, o
 				} else {
 					out.WriteString("    movq rax, xmm0\n")
 				}
-			} else if fn.ReturnType != nil && (fn.ReturnType.Kind == hir.TypeStruct || fn.ReturnType.Kind == hir.TypeArray) && fn.ReturnType.ByteSize() > 8 && t.Value.Kind == mir.OpLocal {
+			} else if fn.ReturnType != nil && fn.ReturnType.ByteSize() > 8 && t.Value.Kind == mir.OpLocal {
 				valOffset := offsets[t.Value.LocalID]
 				out.WriteString(fmt.Sprintf("    lea rax, [rbp - %d]\n", valOffset))
 			} else {
@@ -1059,23 +1129,22 @@ func (b *Backend) loadOperandToReg(op mir.Operand, reg string, offsets map[int]i
 // charLiteralCodePoint decodes a lexer char-literal's raw text (e.g. "a",
 // "\n", "\\") into its Unicode code point, matching lexer.readCharLiteral.
 func charLiteralCodePoint(raw string) int64 {
-	if raw == "" {
+	raw = strings.Trim(raw, "'")
+	if len(raw) == 0 {
 		return 0
 	}
 	if raw[0] == '\\' && len(raw) >= 2 {
 		switch raw[1] {
 		case 'n':
-			return int64('\n')
-		case 't':
-			return int64('\t')
+			return '\n'
 		case 'r':
-			return int64('\r')
-		case '0':
-			return 0
+			return '\r'
+		case 't':
+			return '\t'
 		case '\\':
-			return int64('\\')
+			return '\\'
 		case '\'':
-			return int64('\'')
+			return '\''
 		case '"':
 			return int64('"')
 		}
@@ -1264,11 +1333,21 @@ func (b *Backend) generateCast(c *mir.CastRvalue, destOffset int, offsets map[in
 
 // generateCastToString formats any scalar into a heap-allocated,
 // null-terminated string (giving it the same representation as any other
-// TypeString value elsewhere in the backend: a pointer in a stack slot).
+// generateCastToString formats any scalar into a 16-byte {ptr, len} string.
 func (b *Backend) generateCastToString(c *mir.CastRvalue, fromKind hir.HIRTypeKind, destOffset int, offsets map[int]int, out *bytes.Buffer) {
 	switch {
 	case fromKind == hir.TypeString:
+		if c.Value.Kind == mir.OpLocal {
+			srcOffset := offsets[c.Value.LocalID]
+			out.WriteString(fmt.Sprintf("    mov rax, [rbp - %d]\n", srcOffset))
+			out.WriteString(fmt.Sprintf("    mov [rbp - %d], rax\n", destOffset))
+			out.WriteString(fmt.Sprintf("    mov rax, [rbp - %d + 8]\n", srcOffset))
+			out.WriteString(fmt.Sprintf("    mov [rbp - %d + 8], rax\n", destOffset))
+			return
+		}
 		b.loadOperandToReg(c.Value, "rax", offsets, out)
+		out.WriteString(fmt.Sprintf("    mov [rbp - %d], rax\n", destOffset))
+		return
 	case fromKind == hir.TypeBool:
 		b.loadOperandToReg(c.Value, "rcx", offsets, out)
 		out.WriteString("    call _cupid_bool_to_str\n")
@@ -1292,9 +1371,25 @@ func (b *Backend) generateCastToString(c *mir.CastRvalue, fromKind hir.HIRTypeKi
 		}
 	}
 	out.WriteString(fmt.Sprintf("    mov [rbp - %d], rax\n", destOffset))
+	out.WriteString(fmt.Sprintf("    mov [rbp - %d + 8], rdx\n", destOffset))
 }
 
 func (b *Backend) emitRuntimeHelpers(out *bytes.Buffer) {
+	// _cupid_print_str_len: RCX = ptr, RDX = len
+	out.WriteString("_cupid_print_str_len:\n")
+	out.WriteString("    push rbp\n")
+	out.WriteString("    mov rbp, rsp\n")
+	out.WriteString("    sub rsp, 48\n")
+	out.WriteString("    mov r8, rdx ; len\n")
+	out.WriteString("    mov rdx, rcx ; ptr\n")
+	out.WriteString("    mov rcx, [_cupid_stdout]\n")
+	out.WriteString("    lea r9, [_cupid_bytes_written]\n")
+	out.WriteString("    mov qword [rsp + 32], 0\n")
+	out.WriteString("    call [WriteFile]\n")
+	out.WriteString("    mov rsp, rbp\n")
+	out.WriteString("    pop rbp\n")
+	out.WriteString("    ret\n\n")
+
 	// _cupid_print_str: RCX contains null-terminated string pointer
 	out.WriteString("_cupid_print_str:\n")
 	out.WriteString("    push rbp\n")
@@ -1504,6 +1599,77 @@ func (b *Backend) emitRuntimeHelpers(out *bytes.Buffer) {
 	out.WriteString("    pop rbp\n")
 	out.WriteString("    ret\n\n")
 
+	// _cupid_str_concat_slice: RCX = ptr1, RDX = len1, R8 = ptr2, R9 = len2 -> RAX = ptr, RDX = len
+	out.WriteString("_cupid_str_concat_slice:\n")
+	out.WriteString("    push rbp\n")
+	out.WriteString("    mov rbp, rsp\n")
+	out.WriteString("    sub rsp, 64\n")
+	out.WriteString("    mov [rbp - 8], rcx\n")
+	out.WriteString("    mov [rbp - 16], rdx\n")
+	out.WriteString("    mov [rbp - 24], r8\n")
+	out.WriteString("    mov [rbp - 32], r9\n")
+	out.WriteString("    mov rcx, rdx\n")
+	out.WriteString("    add rcx, r9\n")
+	out.WriteString("    inc rcx\n")
+	out.WriteString("    call _cupid_alloc\n")
+	out.WriteString("    mov [rbp - 40], rax\n")
+	out.WriteString("    mov rsi, [rbp - 8]\n")
+	out.WriteString("    mov rdi, [rbp - 40]\n")
+	out.WriteString("    mov rcx, [rbp - 16]\n")
+	out.WriteString("    test rcx, rcx\n")
+	out.WriteString("    jz .cscs_s2\n")
+	out.WriteString(".cscs_s1_loop:\n")
+	out.WriteString("    mov al, [rsi]\n")
+	out.WriteString("    mov [rdi], al\n")
+	out.WriteString("    inc rsi\n")
+	out.WriteString("    inc rdi\n")
+	out.WriteString("    dec rcx\n")
+	out.WriteString("    jnz .cscs_s1_loop\n")
+	out.WriteString(".cscs_s2:\n")
+	out.WriteString("    mov rsi, [rbp - 24]\n")
+	out.WriteString("    mov rcx, [rbp - 32]\n")
+	out.WriteString("    test rcx, rcx\n")
+	out.WriteString("    jz .cscs_done\n")
+	out.WriteString(".cscs_s2_loop:\n")
+	out.WriteString("    mov al, [rsi]\n")
+	out.WriteString("    mov [rdi], al\n")
+	out.WriteString("    inc rsi\n")
+	out.WriteString("    inc rdi\n")
+	out.WriteString("    dec rcx\n")
+	out.WriteString("    jnz .cscs_s2_loop\n")
+	out.WriteString(".cscs_done:\n")
+	out.WriteString("    mov byte [rdi], 0\n")
+	out.WriteString("    mov rax, [rbp - 40]\n")
+	out.WriteString("    mov rdx, [rbp - 16]\n")
+	out.WriteString("    add rdx, [rbp - 32]\n")
+	out.WriteString("    mov rsp, rbp\n")
+	out.WriteString("    pop rbp\n")
+	out.WriteString("    ret\n\n")
+
+	// _cupid_str_eq_slice: RCX = ptr1, RDX = len1, R8 = ptr2, R9 = len2 -> RAX = 1 or 0
+	out.WriteString("_cupid_str_eq_slice:\n")
+	out.WriteString("    push rbp\n")
+	out.WriteString("    mov rbp, rsp\n")
+	out.WriteString("    cmp rdx, r9\n")
+	out.WriteString("    jne .cseqs_false\n")
+	out.WriteString("    mov rsi, rcx\n")
+	out.WriteString("    mov rdi, r8\n")
+	out.WriteString("    mov rcx, rdx\n")
+	out.WriteString("    test rcx, rcx\n")
+	out.WriteString("    jz .cseqs_true\n")
+	out.WriteString("    repe cmpsb\n")
+	out.WriteString("    jne .cseqs_false\n")
+	out.WriteString(".cseqs_true:\n")
+	out.WriteString("    mov rax, 1\n")
+	out.WriteString("    mov rsp, rbp\n")
+	out.WriteString("    pop rbp\n")
+	out.WriteString("    ret\n")
+	out.WriteString(".cseqs_false:\n")
+	out.WriteString("    xor rax, rax\n")
+	out.WriteString("    mov rsp, rbp\n")
+	out.WriteString("    pop rbp\n")
+	out.WriteString("    ret\n\n")
+
 	// _cupid_str_concat: RCX = s1, RDX = s2 -> RAX = new heap string
 	out.WriteString("_cupid_str_concat:\n")
 	out.WriteString("    push rbp\n")
@@ -1647,19 +1813,19 @@ func (b *Backend) emitRuntimeHelpers(out *bytes.Buffer) {
 
 	// ---- Helpers backing typename(x) -> string casts ----
 
-	// _cupid_bool_to_str: RCX = 0 or 1 -> RAX = pointer to "false"/"true".
-	// No allocation needed: these are the same static strings print() uses.
+	// _cupid_bool_to_str: RCX = 0 or 1 -> RAX = pointer, RDX = len
 	out.WriteString("_cupid_bool_to_str:\n")
 	out.WriteString("    cmp rcx, 0\n")
 	out.WriteString("    je .cbts_false\n")
 	out.WriteString("    lea rax, [_cupid_true_str]\n")
+	out.WriteString("    mov rdx, 4\n")
 	out.WriteString("    ret\n")
 	out.WriteString(".cbts_false:\n")
 	out.WriteString("    lea rax, [_cupid_false_str]\n")
+	out.WriteString("    mov rdx, 5\n")
 	out.WriteString("    ret\n\n")
 
-	// _cupid_char_to_str: RCX = code point -> RAX = pointer to a
-	// freshly-allocated 2-byte "<char>\0" buffer.
+	// _cupid_char_to_str: RCX = code point -> RAX = pointer, RDX = 1
 	out.WriteString("_cupid_char_to_str:\n")
 	out.WriteString("    push rbp\n")
 	out.WriteString("    mov rbp, rsp\n")
@@ -1670,11 +1836,12 @@ func (b *Backend) emitRuntimeHelpers(out *bytes.Buffer) {
 	out.WriteString("    mov rcx, [rbp - 8]\n")
 	out.WriteString("    mov byte [rax], cl\n")
 	out.WriteString("    mov byte [rax + 1], 0\n")
+	out.WriteString("    mov rdx, 1\n")
 	out.WriteString("    mov rsp, rbp\n")
 	out.WriteString("    pop rbp\n")
 	out.WriteString("    ret\n\n")
 
-	// _cupid_i64_to_str: RCX = signed 64-bit value -> RAX = formatted buffer.
+	// _cupid_i64_to_str: RCX = signed 64-bit value -> RAX = ptr, RDX = len
 	out.WriteString("_cupid_i64_to_str:\n")
 	out.WriteString("    push rbp\n")
 	out.WriteString("    mov rbp, rsp\n")
@@ -1687,12 +1854,13 @@ func (b *Backend) emitRuntimeHelpers(out *bytes.Buffer) {
 	out.WriteString("    lea rdx, [_cupid_fmt_i64]\n")
 	out.WriteString("    mov r8, [rbp - 8]\n")
 	out.WriteString("    call [sprintf]\n")
+	out.WriteString("    movsxd rdx, eax\n")
 	out.WriteString("    mov rax, [rbp - 16]\n")
 	out.WriteString("    mov rsp, rbp\n")
 	out.WriteString("    pop rbp\n")
 	out.WriteString("    ret\n\n")
 
-	// _cupid_u64_to_str: RCX = unsigned 64-bit value -> RAX = formatted buffer.
+	// _cupid_u64_to_str: RCX = unsigned 64-bit value -> RAX = ptr, RDX = len
 	out.WriteString("_cupid_u64_to_str:\n")
 	out.WriteString("    push rbp\n")
 	out.WriteString("    mov rbp, rsp\n")
@@ -1705,16 +1873,13 @@ func (b *Backend) emitRuntimeHelpers(out *bytes.Buffer) {
 	out.WriteString("    lea rdx, [_cupid_fmt_u64]\n")
 	out.WriteString("    mov r8, [rbp - 8]\n")
 	out.WriteString("    call [sprintf]\n")
+	out.WriteString("    movsxd rdx, eax\n")
 	out.WriteString("    mov rax, [rbp - 16]\n")
 	out.WriteString("    mov rsp, rbp\n")
 	out.WriteString("    pop rbp\n")
 	out.WriteString("    ret\n\n")
 
-	// _cupid_f64_to_str: XMM0 = double value -> RAX = formatted buffer.
-	// sprintf is variadic, and the Windows x64 ABI requires variadic
-	// floating-point args to be duplicated into the positional GP register
-	// (R8 here, since buf/fmt already occupy RCX/RDX) as well as XMM2, in
-	// case the callee reads va_args through the integer registers.
+	// _cupid_f64_to_str: XMM0 = double value -> RAX = ptr, RDX = len
 	out.WriteString("_cupid_f64_to_str:\n")
 	out.WriteString("    push rbp\n")
 	out.WriteString("    mov rbp, rsp\n")
@@ -1728,6 +1893,7 @@ func (b *Backend) emitRuntimeHelpers(out *bytes.Buffer) {
 	out.WriteString("    movsd xmm2, [rbp - 8]\n")
 	out.WriteString("    movq r8, xmm2\n")
 	out.WriteString("    call [sprintf]\n")
+	out.WriteString("    movsxd rdx, eax\n")
 	out.WriteString("    mov rax, [rbp - 16]\n")
 	out.WriteString("    mov rsp, rbp\n")
 	out.WriteString("    pop rbp\n")

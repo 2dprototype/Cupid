@@ -67,7 +67,7 @@ func (bc *BorrowChecker) isCopyType(t ast.Type) bool {
 	switch pt := t.(type) {
 	case *ast.PrimitiveType:
 		switch pt.Name {
-		case "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "f32", "f64", "bool", "char", "void", "int", "uint", "usize", "isize", "string":
+		case "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "f32", "f64", "bool", "char", "void", "int", "uint", "usize", "isize":
 			return true
 		default:
 			return false
