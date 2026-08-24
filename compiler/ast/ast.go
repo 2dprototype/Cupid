@@ -123,6 +123,20 @@ func (dt *DynTraitType) Pos() Position { return dt.Position }
 func (dt *DynTraitType) String() string { return "dyn " + dt.Trait }
 func (dt *DynTraitType) typeNode() {}
 
+type TupleType struct {
+	Position Position
+	Elements []Type
+}
+func (tt *TupleType) Pos() Position { return tt.Position }
+func (tt *TupleType) String() string {
+	parts := []string{}
+	for _, e := range tt.Elements {
+		parts = append(parts, e.String())
+	}
+	return "(" + strings.Join(parts, ", ") + ")"
+}
+func (tt *TupleType) typeNode() {}
+
 // ---------------- Declarations ----------------
 
 type Program struct {
@@ -271,6 +285,7 @@ type StructDecl struct {
 	Lifetimes []string
 	Generics  []GenericParam
 	Fields    []StructField
+	IsTuple   bool
 }
 func (sd *StructDecl) Pos() Position { return sd.Position }
 func (sd *StructDecl) String() string {
@@ -290,6 +305,16 @@ func (sd *StructDecl) String() string {
 		}
 		sb.WriteString(strings.Join(parts, ", "))
 		sb.WriteString(">")
+	}
+	if sd.IsTuple {
+		sb.WriteString("(")
+		parts := []string{}
+		for _, f := range sd.Fields {
+			parts = append(parts, f.Type.String())
+		}
+		sb.WriteString(strings.Join(parts, ", "))
+		sb.WriteString(")")
+		return sb.String()
 	}
 	sb.WriteString(" {\n")
 	for _, f := range sd.Fields {
@@ -454,18 +479,20 @@ type LetStmt struct {
 	Mutable  bool
 	Type     Type // optional
 	Value    Expr
+	Pattern  Expr // optional, for tuple destructuring: let (a, b) = t or let Point(x, y) = p
 }
 func (ls *LetStmt) Pos() Position { return ls.Position }
 func (ls *LetStmt) String() string {
 	keyword := "let"
 	if ls.Mutable {
-		keyword = "mut" // Note: in spec, "mut score = 0" or "let mut score = 0"? Let's check plan.md.
-		// plan.md line 542: "`let` defines immutable bindings", "`mut` defines mutable bindings".
-		// line 550: "let name = \"Tokio\" \n mut score = 0"
-		// So mutable binding is "mut score = 0", immutable is "let score = 0"
+		keyword = "mut"
 	}
 	var sb strings.Builder
-	sb.WriteString(keyword + " " + ls.Name)
+	if ls.Pattern != nil {
+		sb.WriteString(keyword + " " + ls.Pattern.String())
+	} else {
+		sb.WriteString(keyword + " " + ls.Name)
+	}
 	if ls.Type != nil {
 		sb.WriteString(": " + ls.Type.String())
 	}
@@ -876,3 +903,20 @@ func (te *TypeofExpr) String() string {
 	return "typeof(" + te.Value.String() + ")"
 }
 func (te *TypeofExpr) exprNode() {}
+
+type TupleExpr struct {
+	Position Position
+	Elements []Expr
+}
+func (te *TupleExpr) Pos() Position { return te.Position }
+func (te *TupleExpr) String() string {
+	parts := []string{}
+	for _, e := range te.Elements {
+		parts = append(parts, e.String())
+	}
+	if len(parts) == 1 {
+		return "(" + parts[0] + ",)"
+	}
+	return "(" + strings.Join(parts, ", ") + ")"
+}
+func (te *TupleExpr) exprNode() {}

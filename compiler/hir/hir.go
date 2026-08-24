@@ -31,6 +31,7 @@ const (
 	TypeArray
 	TypeStruct
 	TypeDynTrait
+	TypeTuple
 )
 
 type HIRType struct {
@@ -95,6 +96,12 @@ func (t *HIRType) String() string {
 		return t.Name
 	case TypeDynTrait:
 		return "dyn " + t.Name
+	case TypeTuple:
+		parts := []string{}
+		for _, f := range t.Fields {
+			parts = append(parts, f.Type.String())
+		}
+		return "(" + strings.Join(parts, ", ") + ")"
 	}
 	return t.Name
 }
@@ -121,11 +128,22 @@ func (t *HIRType) ByteSize() int {
 			return 16 // slice: ptr + len
 		}
 		return t.Size * t.ElemType.ByteSize()
-	case TypeStruct:
+	case TypeStruct, TypeTuple:
 		total := 0
 		for _, f := range t.Fields {
 			sz := f.Type.ByteSize()
+			// Align
+			if sz > 4 && total%8 != 0 {
+				total = (total + 7) &^ 7
+			} else if sz > 2 && total%4 != 0 {
+				total = (total + 3) &^ 3
+			} else if sz > 1 && total%2 != 0 {
+				total = (total + 1) &^ 1
+			}
 			total += sz
+		}
+		if total > 0 && total%8 != 0 {
+			total = (total + 7) &^ 7
 		}
 		if total == 0 {
 			return 8
@@ -550,6 +568,9 @@ func (l *Lowerer) lowerBlock(bs *ast.BlockStmt, mod *modules.Module) *HIRBlock {
 func (l *Lowerer) lowerStmt(stmt ast.Stmt, mod *modules.Module) HIRStmt {
 	switch s := stmt.(type) {
 	case *ast.LetStmt:
+		if s.Pattern != nil {
+			return l.lowerDestructurePattern(s.Pattern, s.Value, s.Mutable, mod)
+		}
 		val := l.lowerExpr(s.Value, mod)
 		typ := l.convertType(s.Type)
 		if typ == nil && val != nil {
@@ -701,6 +722,89 @@ func (l *Lowerer) lowerStmt(stmt ast.Stmt, mod *modules.Module) HIRStmt {
 		}
 	}
 	return nil
+}
+
+var tupDestructCounter = 0
+
+func (l *Lowerer) lowerDestructurePattern(pat ast.Expr, valExpr ast.Expr, isMut bool, mod *modules.Module) HIRStmt {
+	tupDestructCounter++
+	tmpVarName := fmt.Sprintf("__cupid_tup_tmp_%d", tupDestructCounter)
+	val := l.lowerExpr(valExpr, mod)
+	valType := val.Type()
+
+	block := &HIRBlock{Stmts: make([]HIRStmt, 0)}
+	block.Stmts = append(block.Stmts, &HIRLetStmt{
+		Name:    tmpVarName,
+		Mutable: false,
+		Type:    valType,
+		Value:   val,
+	})
+
+	l.lowerPatternBindings(pat, &HIRVar{Name: tmpVarName, Typ: valType}, isMut, block, mod)
+	return block
+}
+
+func (l *Lowerer) lowerPatternBindings(pat ast.Expr, base HIRExpr, isMut bool, block *HIRBlock, mod *modules.Module) {
+	if pat == nil {
+		return
+	}
+	switch p := pat.(type) {
+	case *ast.IdentExpr:
+		if p.Name != "_" {
+			block.Stmts = append(block.Stmts, &HIRLetStmt{
+				Name:    p.Name,
+				Mutable: isMut,
+				Type:    base.Type(),
+				Value:   base,
+			})
+		}
+	case *ast.TupleExpr:
+		baseType := base.Type()
+		for i, el := range p.Elements {
+			fieldStr := fmt.Sprintf("%d", i)
+			var elemType *HIRType
+			offset := 0
+			if baseType != nil {
+				for _, f := range baseType.Fields {
+					if f.Name == fieldStr {
+						elemType = f.Type
+						offset = f.Offset
+						break
+					}
+				}
+			}
+			elemAccess := &HIRFieldAccessExpr{
+				Target: base,
+				Field:  fieldStr,
+				Offset: offset,
+				Typ:    elemType,
+			}
+			l.lowerPatternBindings(el, elemAccess, isMut, block, mod)
+		}
+	case *ast.CallExpr:
+		baseType := base.Type()
+		for i, arg := range p.Args {
+			fieldStr := fmt.Sprintf("%d", i)
+			var elemType *HIRType
+			offset := 0
+			if baseType != nil {
+				for _, f := range baseType.Fields {
+					if f.Name == fieldStr {
+						elemType = f.Type
+						offset = f.Offset
+						break
+					}
+				}
+			}
+			elemAccess := &HIRFieldAccessExpr{
+				Target: base,
+				Field:  fieldStr,
+				Offset: offset,
+				Typ:    elemType,
+			}
+			l.lowerPatternBindings(arg, elemAccess, isMut, block, mod)
+		}
+	}
 }
 
 func (l *Lowerer) lowerExpr(expr ast.Expr, mod *modules.Module) HIRExpr {
@@ -857,7 +961,17 @@ func (l *Lowerer) lowerExpr(expr ast.Expr, mod *modules.Module) HIRExpr {
 			}
 
 			if decl != nil {
-				if fd, isFunc := decl.(*ast.FuncDecl); isFunc {
+				if sd, isStruct := decl.(*ast.StructDecl); isStruct && sd.IsTuple {
+					stType := l.convertType(&ast.PrimitiveType{Position: sd.Position, Name: sd.Name})
+					fields := make(map[string]HIRExpr)
+					for i, a := range e.Args {
+						fields[fmt.Sprintf("%d", i)] = l.lowerExpr(a, mod)
+					}
+					return &HIRStructInitExpr{
+						StructType: stType,
+						Fields:     fields,
+					}
+				} else if fd, isFunc := decl.(*ast.FuncDecl); isFunc {
 					funcName = fd.Name
 				} else {
 					funcName = ident.Name
@@ -876,6 +990,15 @@ func (l *Lowerer) lowerExpr(expr ast.Expr, mod *modules.Module) HIRExpr {
 			FuncName: funcName,
 			Args:     args,
 			Typ:      hirType,
+		}
+	case *ast.TupleExpr:
+		fields := make(map[string]HIRExpr)
+		for i, el := range e.Elements {
+			fields[fmt.Sprintf("%d", i)] = l.lowerExpr(el, mod)
+		}
+		return &HIRStructInitExpr{
+			StructType: hirType,
+			Fields:     fields,
 		}
 	case *ast.StructInitExpr:
 		stType := l.convertType(e.Struct)
@@ -1104,6 +1227,30 @@ func (l *Lowerer) convertType(astType ast.Type) *HIRType {
 		return &HIRType{
 			Kind: TypeStruct,
 			Name: t.BaseName,
+		}
+	case *ast.TupleType:
+		var fields []HIRField
+		offset := 0
+		for i, el := range t.Elements {
+			ft := l.convertType(el)
+			sz := ft.ByteSize()
+			if sz > 4 && offset%8 != 0 {
+				offset = (offset + 7) &^ 7
+			} else if sz > 2 && offset%4 != 0 {
+				offset = (offset + 3) &^ 3
+			} else if sz > 1 && offset%2 != 0 {
+				offset = (offset + 1) &^ 1
+			}
+			fields = append(fields, HIRField{
+				Name:   fmt.Sprintf("%d", i),
+				Type:   ft,
+				Offset: offset,
+			})
+			offset += sz
+		}
+		return &HIRType{
+			Kind:   TypeTuple,
+			Fields: fields,
 		}
 	case *ast.DynTraitType:
 		return &HIRType{

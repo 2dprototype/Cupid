@@ -76,6 +76,13 @@ func (bc *BorrowChecker) isCopyType(t ast.Type) bool {
 		return true // references themselves are copy
 	case *ast.ArrayType:
 		return bc.isCopyType(pt.Element)
+	case *ast.TupleType:
+		for _, el := range pt.Elements {
+			if !bc.isCopyType(el) {
+				return false
+			}
+		}
+		return true
 	case *ast.ChannelType:
 		return false
 	}
@@ -183,8 +190,12 @@ func (bc *BorrowChecker) checkStmt(stmt ast.Stmt, env *borrowEnv, mod *modules.M
 		// 1. Check value expression
 		bc.checkExpr(s.Value, env, mod, false)
 
-		// 2. Register variable
-		env.declaredInBlock[env.nestingLevel] = append(env.declaredInBlock[env.nestingLevel], s.Name)
+		// 2. Register variable(s)
+		if s.Pattern != nil {
+			bc.collectPatternVars(s.Pattern, env)
+		} else {
+			env.declaredInBlock[env.nestingLevel] = append(env.declaredInBlock[env.nestingLevel], s.Name)
+		}
 
 		// 3. Detect if this variable is a borrow creation
 		if ref, ok := s.Value.(*ast.RefExpr); ok {
@@ -195,7 +206,11 @@ func (bc *BorrowChecker) checkStmt(stmt ast.Stmt, env *borrowEnv, mod *modules.M
 				}
 
 				// Check borrowing rules
-				bc.addBorrow(ident.Name, s.Name, kind, ref.Position, env)
+				varName := s.Name
+				if s.Pattern != nil {
+					varName = s.Pattern.String()
+				}
+				bc.addBorrow(ident.Name, varName, kind, ref.Position, env)
 			}
 		}
 
@@ -345,6 +360,11 @@ func (bc *BorrowChecker) checkExpr(expr ast.Expr, env *borrowEnv, mod *modules.M
 		bc.checkExpr(e.Target, env, mod, false)
 		bc.checkExpr(e.Index, env, mod, false)
 
+	case *ast.TupleExpr:
+		for _, el := range e.Elements {
+			bc.checkExpr(el, env, mod, isMoveContext)
+		}
+
 	case *ast.StructInitExpr:
 		for _, f := range e.Fields {
 			bc.checkExpr(f.Value, env, mod, isMoveContext)
@@ -365,6 +385,26 @@ func (bc *BorrowChecker) checkExpr(expr ast.Expr, env *borrowEnv, mod *modules.M
 
 	case *ast.TypeofExpr:
 		bc.checkExpr(e.Value, env, mod, false)
+	}
+}
+
+func (bc *BorrowChecker) collectPatternVars(pat ast.Expr, env *borrowEnv) {
+	if pat == nil {
+		return
+	}
+	switch p := pat.(type) {
+	case *ast.IdentExpr:
+		if p.Name != "_" {
+			env.declaredInBlock[env.nestingLevel] = append(env.declaredInBlock[env.nestingLevel], p.Name)
+		}
+	case *ast.TupleExpr:
+		for _, el := range p.Elements {
+			bc.collectPatternVars(el, env)
+		}
+	case *ast.CallExpr:
+		for _, arg := range p.Args {
+			bc.collectPatternVars(arg, env)
+		}
 	}
 }
 

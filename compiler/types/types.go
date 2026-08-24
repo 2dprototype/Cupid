@@ -269,6 +269,17 @@ func (tc *TypeChecker) TypesEqual(t1, t2 ast.Type) bool {
 			return tc.TypesEqual(pt1.Element, pt2.Element)
 		}
 		return pt1.Size == pt2.Size && tc.TypesEqual(pt1.Element, pt2.Element)
+	case *ast.TupleType:
+		pt2, ok := t2.(*ast.TupleType)
+		if !ok || len(pt1.Elements) != len(pt2.Elements) {
+			return false
+		}
+		for i := range pt1.Elements {
+			if !tc.TypesEqual(pt1.Elements[i], pt2.Elements[i]) {
+				return false
+			}
+		}
+		return true
 	case *ast.DynTraitType:
 		pt2, ok := t2.(*ast.DynTraitType)
 		return ok && pt1.Trait == pt2.Trait
@@ -402,6 +413,9 @@ func (tc *TypeChecker) typeCheckStmt(stmt ast.Stmt, expectedRet ast.Type, mod *m
 						s.Name, expectedType.String(), valType.String()),
 					"E401", len(s.Name))
 			}
+		}
+		if s.Pattern != nil && valType != nil {
+			tc.typeCheckPattern(s.Pattern, valType, mod)
 		}
 	case *ast.ConstStmt:
 		var expectedType ast.Type
@@ -555,6 +569,16 @@ func (tc *TypeChecker) TypeCheckExpr(expr ast.Expr, mod *modules.Module) ast.Typ
 			elemType = &ast.PrimitiveType{Position: e.Position, Name: "i64"}
 		}
 		t = &ast.ArrayType{Position: e.Position, Element: elemType, Size: len(e.Elements)}
+	case *ast.TupleExpr:
+		var elemTypes []ast.Type
+		for _, el := range e.Elements {
+			tEl := tc.TypeCheckExpr(el, mod)
+			if tEl == nil {
+				tEl = &ast.PrimitiveType{Position: el.Pos(), Name: "i64"}
+			}
+			elemTypes = append(elemTypes, tEl)
+		}
+		t = &ast.TupleType{Position: e.Position, Elements: elemTypes}
 	case *ast.StructInitExpr:
 		t = tc.typeCheckStructInitExpr(e, mod)
 	case *ast.MatchExpr:
@@ -563,10 +587,7 @@ func (tc *TypeChecker) TypeCheckExpr(expr ast.Expr, mod *modules.Module) ast.Typ
 			if ident, ok := c.Pattern.(*ast.IdentExpr); ok && ident.Name == "_" {
 				// Wildcard matches all target types
 			} else {
-				patType := tc.TypeCheckExpr(c.Pattern, mod)
-				if targetType != nil && patType != nil && !tc.TypesEqual(targetType, patType) {
-					tc.reportError(c.Pattern.Pos(), fmt.Sprintf("match pattern type mismatch: expected %q, got %q", targetType.String(), patType.String()), "E401", len(c.Pattern.String()))
-				}
+				tc.typeCheckPattern(c.Pattern, targetType, mod)
 			}
 			tc.typeCheckBlockStmt(c.Body, &ast.PrimitiveType{Name: "void"}, mod)
 		}
@@ -791,6 +812,16 @@ func (tc *TypeChecker) typeCheckSelectorExpr(se *ast.SelectorExpr, mod *modules.
 		}
 	}
 
+	// Handle tuple indexing: t.0, t.1
+	if tt, ok := underlying.(*ast.TupleType); ok {
+		idx, err := strconv.Atoi(se.Field)
+		if err != nil || idx < 0 || idx >= len(tt.Elements) {
+			tc.reportError(se.Pos(), fmt.Sprintf("invalid tuple index %q (tuple has %d elements)", se.Field, len(tt.Elements)), "E407", len(se.Field))
+			return nil
+		}
+		return tt.Elements[idx]
+	}
+
 	// Resolve the underlying custom type (struct)
 	if prim, ok := underlying.(*ast.PrimitiveType); ok {
 		// Look up struct declaration
@@ -825,6 +856,23 @@ func (tc *TypeChecker) typeCheckSelectorExpr(se *ast.SelectorExpr, mod *modules.
 }
 
 func (tc *TypeChecker) typeCheckCallExpr(ce *ast.CallExpr, mod *modules.Module) ast.Type {
+	// Handle tuple struct constructor e.g. Color(255, 0, 128)
+	if decl, exists := tc.resolutions[ce.Function]; exists {
+		if sd, ok := decl.(*ast.StructDecl); ok && sd.IsTuple {
+			if len(ce.Args) != len(sd.Fields) {
+				tc.reportError(ce.Pos(), fmt.Sprintf("tuple struct %q expects %d arguments, got %d", sd.Name, len(sd.Fields), len(ce.Args)), "E405", len(sd.Name))
+				return nil
+			}
+			for i, arg := range ce.Args {
+				argType := tc.TypeCheckExpr(arg, mod)
+				expectedFieldType := sd.Fields[i].Type
+				if argType != nil && !tc.checkAssignable(expectedFieldType, arg, argType) {
+					tc.reportError(arg.Pos(), fmt.Sprintf("type mismatch in tuple struct %q field %d: expected %q, got %q", sd.Name, i, expectedFieldType.String(), argType.String()), "E401", len(arg.String()))
+				}
+			}
+			return &ast.PrimitiveType{Position: ce.Position, Name: sd.Name}
+		}
+	}
 	// Handle builtins
 	if ident, ok := ce.Function.(*ast.IdentExpr); ok {
 		switch ident.Name {
@@ -1096,6 +1144,11 @@ func (tc *TypeChecker) resolveAndValidateType(t ast.Type, mod *modules.Module) a
 	case *ast.ArrayType:
 		pt.Element = tc.resolveAndValidateType(pt.Element, mod)
 		return pt
+	case *ast.TupleType:
+		for i, el := range pt.Elements {
+			pt.Elements[i] = tc.resolveAndValidateType(el, mod)
+		}
+		return pt
 	case *ast.GenericType:
 		// Monomorphize generic type references
 		sd := tc.findStructDecl(pt.BaseName, mod)
@@ -1108,6 +1161,53 @@ func (tc *TypeChecker) resolveAndValidateType(t ast.Type, mod *modules.Module) a
 		return pt
 	}
 	return t
+}
+
+func (tc *TypeChecker) typeCheckPattern(pat ast.Expr, targetType ast.Type, mod *modules.Module) {
+	if pat == nil || targetType == nil {
+		return
+	}
+	underlying := targetType
+	if ptr, ok := underlying.(*ast.PointerType); ok {
+		underlying = ptr.To
+	}
+
+	switch p := pat.(type) {
+	case *ast.IdentExpr:
+		if p.Name != "_" {
+			tc.ExprTypes[p] = targetType
+		}
+	case *ast.TupleExpr:
+		if tt, ok := underlying.(*ast.TupleType); ok {
+			if len(p.Elements) != len(tt.Elements) {
+				tc.reportError(p.Pos(), fmt.Sprintf("tuple pattern element count mismatch: expected %d, got %d", len(tt.Elements), len(p.Elements)), "E401", 1)
+				return
+			}
+			for i, el := range p.Elements {
+				tc.typeCheckPattern(el, tt.Elements[i], mod)
+			}
+		} else {
+			tc.reportError(p.Pos(), fmt.Sprintf("cannot match non-tuple type %q with tuple pattern", targetType.String()), "E401", 1)
+		}
+	case *ast.CallExpr:
+		if ident, ok := p.Function.(*ast.IdentExpr); ok {
+			sd := tc.findStructDecl(ident.Name, mod)
+			if sd != nil && sd.IsTuple {
+				if len(p.Args) != len(sd.Fields) {
+					tc.reportError(p.Pos(), fmt.Sprintf("tuple struct pattern %q expects %d fields, got %d", sd.Name, len(sd.Fields), len(p.Args)), "E405", len(sd.Name))
+					return
+				}
+				for i, arg := range p.Args {
+					tc.typeCheckPattern(arg, sd.Fields[i].Type, mod)
+				}
+				return
+			}
+		}
+		// Fall back to general call type check
+		tc.TypeCheckExpr(p, mod)
+	default:
+		tc.TypeCheckExpr(pat, mod)
+	}
 }
 
 func (tc *TypeChecker) findStructDecl(name string, mod *modules.Module) *ast.StructDecl {

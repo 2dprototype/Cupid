@@ -277,15 +277,19 @@ func (r *Resolver) resolveStmt(stmt ast.Stmt, mod *modules.Module, scope *Scope)
 			r.resolveType(s.Type, mod, scope)
 		}
 		r.resolveExpr(s.Value, mod, scope)
-		// Register variable in current scope
-		sym := &Symbol{
-			Name:     s.Name,
-			Kind:     SymVar,
-			DeclNode: s,
-			IsMut:    s.Mutable,
-		}
-		if !scope.Insert(sym) {
-			r.reportError(s.Pos(), fmt.Sprintf("redefinition of variable %q in block scope", s.Name), "E302", len(s.Name))
+		if s.Pattern != nil {
+			r.bindPatternVariables(s.Pattern, s, s.Mutable, mod, scope)
+		} else {
+			// Register variable in current scope
+			sym := &Symbol{
+				Name:     s.Name,
+				Kind:     SymVar,
+				DeclNode: s,
+				IsMut:    s.Mutable,
+			}
+			if !scope.Insert(sym) {
+				r.reportError(s.Pos(), fmt.Sprintf("redefinition of variable %q in block scope", s.Name), "E302", len(s.Name))
+			}
 		}
 	case *ast.ReturnStmt:
 		if s.Value != nil {
@@ -397,13 +401,15 @@ func (r *Resolver) resolveExpr(expr ast.Expr, mod *modules.Module, scope *Scope)
 		for _, f := range e.Fields {
 			r.resolveExpr(f.Value, mod, scope)
 		}
+	case *ast.TupleExpr:
+		for _, elem := range e.Elements {
+			r.resolveExpr(elem, mod, scope)
+		}
 	case *ast.MatchExpr:
 		r.resolveExpr(e.Target, mod, scope)
 		for _, c := range e.Cases {
 			caseScope := NewScope(scope)
-			if ident, ok := c.Pattern.(*ast.IdentExpr); !ok || ident.Name != "_" {
-				r.resolveExpr(c.Pattern, mod, caseScope)
-			}
+			r.resolvePattern(c.Pattern, mod, caseScope)
 			r.resolveBlockStmt(c.Body, mod, caseScope)
 		}
 	case *ast.QuestionExpr:
@@ -413,6 +419,64 @@ func (r *Resolver) resolveExpr(expr ast.Expr, mod *modules.Module, scope *Scope)
 		r.resolveExpr(e.Value, mod, scope)
 	case *ast.TypeofExpr:
 		r.resolveExpr(e.Value, mod, scope)
+	}
+}
+
+func (r *Resolver) resolvePattern(pattern ast.Expr, mod *modules.Module, scope *Scope) {
+	if pattern == nil {
+		return
+	}
+	switch p := pattern.(type) {
+	case *ast.IdentExpr:
+		if p.Name != "_" {
+			scope.Insert(&Symbol{
+				Name:     p.Name,
+				Kind:     SymVar,
+				DeclNode: p,
+			})
+		}
+	case *ast.TupleExpr:
+		for _, elem := range p.Elements {
+			r.resolvePattern(elem, mod, scope)
+		}
+	case *ast.CallExpr:
+		r.resolveExpr(p.Function, mod, scope)
+		for _, arg := range p.Args {
+			r.resolvePattern(arg, mod, scope)
+		}
+	case *ast.LiteralExpr:
+		// Nothing to bind for literals
+	default:
+		r.resolveExpr(pattern, mod, scope)
+	}
+}
+
+func (r *Resolver) bindPatternVariables(pat ast.Expr, declNode ast.Node, isMut bool, mod *modules.Module, scope *Scope) {
+	if pat == nil {
+		return
+	}
+	switch p := pat.(type) {
+	case *ast.IdentExpr:
+		if p.Name != "_" {
+			sym := &Symbol{
+				Name:     p.Name,
+				Kind:     SymVar,
+				DeclNode: declNode,
+				IsMut:    isMut,
+			}
+			if !scope.Insert(sym) {
+				r.reportError(p.Pos(), fmt.Sprintf("redefinition of variable %q in block scope", p.Name), "E302", len(p.Name))
+			}
+		}
+	case *ast.TupleExpr:
+		for _, elem := range p.Elements {
+			r.bindPatternVariables(elem, declNode, isMut, mod, scope)
+		}
+	case *ast.CallExpr:
+		r.resolveExpr(p.Function, mod, scope)
+		for _, arg := range p.Args {
+			r.bindPatternVariables(arg, declNode, isMut, mod, scope)
+		}
 	}
 }
 
@@ -525,6 +589,10 @@ func (r *Resolver) resolveType(t ast.Type, mod *modules.Module, scope *Scope) {
 		r.resolveType(pt.To, mod, scope)
 	case *ast.ArrayType:
 		r.resolveType(pt.Element, mod, scope)
+	case *ast.TupleType:
+		for _, elem := range pt.Elements {
+			r.resolveType(elem, mod, scope)
+		}
 	case *ast.GenericType:
 		r.resolveType(&ast.PrimitiveType{Position: pt.Position, Name: pt.BaseName}, mod, scope)
 		for _, p := range pt.Params {

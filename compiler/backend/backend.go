@@ -362,12 +362,29 @@ func (b *Backend) generateStatement(stmt mir.Statement, fn *mir.MIRFunction, off
 		case *mir.CallRvalue:
 			b.generateCall(src, destOffset, offsets, out)
 		case *mir.FieldAccessRvalue:
+			if src.Type != nil && src.Type.ByteSize() > 8 {
+				numWords := (src.Type.ByteSize() + 7) / 8
+				if src.Base.Kind == mir.OpLocal && src.Base.Type != nil && (src.Base.Type.Kind == hir.TypeStruct || src.Base.Type.Kind == hir.TypeTuple) {
+					baseOffset := offsets[src.Base.LocalID]
+					for w := 0; w < numWords; w++ {
+						out.WriteString(fmt.Sprintf("    mov rax, [rbp - %d + %d]\n", baseOffset, src.Offset+w*8))
+						out.WriteString(fmt.Sprintf("    mov [rbp - %d + %d], rax\n", destOffset, w*8))
+					}
+				} else {
+					b.loadOperandToReg(src.Base, "rax", offsets, out)
+					for w := 0; w < numWords; w++ {
+						out.WriteString(fmt.Sprintf("    mov rcx, [rax + %d]\n", src.Offset+w*8))
+						out.WriteString(fmt.Sprintf("    mov [rbp - %d + %d], rcx\n", destOffset, w*8))
+					}
+				}
+				break
+			}
 			fKind := hir.TypeI64
 			if src.Type != nil {
 				fKind = src.Type.Kind
 			}
 			addr := ""
-			if src.Base.Kind == mir.OpLocal && src.Base.Type != nil && src.Base.Type.Kind == hir.TypeStruct {
+			if src.Base.Kind == mir.OpLocal && src.Base.Type != nil && (src.Base.Type.Kind == hir.TypeStruct || src.Base.Type.Kind == hir.TypeTuple) {
 				baseOffset := offsets[src.Base.LocalID]
 				addr = fmt.Sprintf("[rbp - %d + %d]", baseOffset, src.Offset)
 			} else {
@@ -572,9 +589,44 @@ func (b *Backend) generateStatement(stmt mir.Statement, fn *mir.MIRFunction, off
 			out.WriteString("    mov qword [rax], rcx\n")
 		}
 	case *mir.SetFieldStmt:
+		if s.Val.Type != nil && s.Val.Type.ByteSize() > 8 {
+			numWords := (s.Val.Type.ByteSize() + 7) / 8
+			if s.Val.Kind == mir.OpLocal {
+				valOffset := offsets[s.Val.LocalID]
+				if s.Base.Kind == mir.OpLocal && s.Base.Type != nil && (s.Base.Type.Kind == hir.TypeStruct || s.Base.Type.Kind == hir.TypeTuple) {
+					baseOffset := offsets[s.Base.LocalID]
+					for w := 0; w < numWords; w++ {
+						out.WriteString(fmt.Sprintf("    mov rax, [rbp - %d + %d]\n", valOffset, w*8))
+						out.WriteString(fmt.Sprintf("    mov [rbp - %d + %d], rax\n", baseOffset, s.Offset+w*8))
+					}
+				} else {
+					b.loadOperandToReg(s.Base, "rdx", offsets, out)
+					for w := 0; w < numWords; w++ {
+						out.WriteString(fmt.Sprintf("    mov rax, [rbp - %d + %d]\n", valOffset, w*8))
+						out.WriteString(fmt.Sprintf("    mov [rdx + %d], rax\n", s.Offset+w*8))
+					}
+				}
+			} else {
+				// OpConst string
+				cleanVal := strings.Trim(s.Val.Constant, "\"")
+				strLabel := b.getStringLabel(s.Val.Constant)
+				if s.Base.Kind == mir.OpLocal && s.Base.Type != nil && (s.Base.Type.Kind == hir.TypeStruct || s.Base.Type.Kind == hir.TypeTuple) {
+					baseOffset := offsets[s.Base.LocalID]
+					out.WriteString(fmt.Sprintf("    lea rax, [%s]\n", strLabel))
+					out.WriteString(fmt.Sprintf("    mov [rbp - %d + %d], rax\n", baseOffset, s.Offset))
+					out.WriteString(fmt.Sprintf("    mov qword [rbp - %d + %d + 8], %d\n", baseOffset, s.Offset, len(cleanVal)))
+				} else {
+					b.loadOperandToReg(s.Base, "rdx", offsets, out)
+					out.WriteString(fmt.Sprintf("    lea rax, [%s]\n", strLabel))
+					out.WriteString(fmt.Sprintf("    mov [rdx + %d], rax\n", s.Offset))
+					out.WriteString(fmt.Sprintf("    mov qword [rdx + %d + 8], %d\n", s.Offset, len(cleanVal)))
+				}
+			}
+			break
+		}
 		b.loadOperandToReg(s.Val, "rcx", offsets, out)
 		addr := ""
-		if s.Base.Kind == mir.OpLocal && s.Base.Type != nil && s.Base.Type.Kind == hir.TypeStruct {
+		if s.Base.Kind == mir.OpLocal && s.Base.Type != nil && (s.Base.Type.Kind == hir.TypeStruct || s.Base.Type.Kind == hir.TypeTuple) {
 			baseOffset := offsets[s.Base.LocalID]
 			addr = fmt.Sprintf("[rbp - %d + %d]", baseOffset, s.Offset)
 		} else {

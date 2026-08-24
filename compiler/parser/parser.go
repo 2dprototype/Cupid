@@ -421,6 +421,40 @@ func (p *Parser) parseStructDecl(exported bool) *ast.StructDecl {
 		}
 	}
 
+	if p.peekTokenIs(lexer.LPAREN) {
+		p.nextToken() // consume '('
+		fields := []ast.StructField{}
+		idx := 0
+		if !p.peekTokenIs(lexer.RPAREN) {
+			p.nextToken()
+			ftype := p.parseType()
+			fields = append(fields, ast.StructField{Name: fmt.Sprintf("%d", idx), Type: ftype})
+			idx++
+			for p.peekTokenIs(lexer.COMMA) {
+				p.nextToken() // consume ','
+				if p.peekTokenIs(lexer.RPAREN) {
+					break
+				}
+				p.nextToken()
+				ftype := p.parseType()
+				fields = append(fields, ast.StructField{Name: fmt.Sprintf("%d", idx), Type: ftype})
+				idx++
+			}
+		}
+		if !p.expectPeek(lexer.RPAREN) {
+			return nil
+		}
+		return &ast.StructDecl{
+			Position:  pos,
+			Exported:  exported,
+			Name:      name,
+			Lifetimes: lifetimes,
+			Generics:  generics,
+			Fields:    fields,
+			IsTuple:   true,
+		}
+	}
+
 	if !p.expectPeek(lexer.LBRACE) {
 		return nil
 	}
@@ -714,6 +748,27 @@ func (p *Parser) parseGlobalVarDecl(exported bool, mutable bool) *ast.GlobalVarD
 func (p *Parser) parseType() ast.Type {
 	pos := ast.Position{File: p.curToken.File, Line: p.curToken.Line, Col: p.curToken.Col}
 
+	// Tuple types: (T1, T2, ...) or ()
+	if p.curTokenIs(lexer.LPAREN) {
+		var elements []ast.Type
+		if p.peekTokenIs(lexer.RPAREN) {
+			p.nextToken() // consume ')'
+			return &ast.TupleType{Position: pos, Elements: elements}
+		}
+		p.nextToken()
+		elements = append(elements, p.parseType())
+		for p.peekTokenIs(lexer.COMMA) {
+			p.nextToken() // consume ','
+			if p.peekTokenIs(lexer.RPAREN) {
+				break
+			}
+			p.nextToken()
+			elements = append(elements, p.parseType())
+		}
+		p.expectPeek(lexer.RPAREN)
+		return &ast.TupleType{Position: pos, Elements: elements}
+	}
+
 	// Pointer types: &T or &mut T
 	if p.curTokenIs(lexer.BITAND) {
 		mutable := false
@@ -824,10 +879,101 @@ func (p *Parser) parseStmt() ast.Stmt {
 func (p *Parser) parseLetStmt(mutable bool) *ast.LetStmt {
 	pos := ast.Position{File: p.curToken.File, Line: p.curToken.Line, Col: p.curToken.Col}
 
+	if p.peekTokenIs(lexer.LPAREN) {
+		p.nextToken() // consume '('
+		var elements []ast.Expr
+		if !p.peekTokenIs(lexer.RPAREN) {
+			p.nextToken()
+			elements = append(elements, p.parseExpr(LOWEST))
+			for p.peekTokenIs(lexer.COMMA) {
+				p.nextToken() // consume ','
+				if p.peekTokenIs(lexer.RPAREN) {
+					break
+				}
+				p.nextToken()
+				elements = append(elements, p.parseExpr(LOWEST))
+			}
+		}
+		if !p.expectPeek(lexer.RPAREN) {
+			return nil
+		}
+		pattern := &ast.TupleExpr{Position: pos, Elements: elements}
+
+		var ftype ast.Type
+		if p.peekTokenIs(lexer.COLON) {
+			p.nextToken()
+			p.nextToken()
+			ftype = p.parseType()
+		}
+
+		if !p.expectPeek(lexer.ASSIGN) {
+			return nil
+		}
+
+		p.nextToken()
+		val := p.parseExpr(LOWEST)
+
+		return &ast.LetStmt{
+			Position: pos,
+			Mutable:  mutable,
+			Pattern:  pattern,
+			Type:     ftype,
+			Value:    val,
+		}
+	}
+
 	if !p.expectPeek(lexer.IDENT) {
 		return nil
 	}
 	name := p.curToken.Literal
+
+	// Check for tuple struct pattern: `let Point(x, y) = p`
+	if p.peekTokenIs(lexer.LPAREN) {
+		p.nextToken() // consume '('
+		var elements []ast.Expr
+		if !p.peekTokenIs(lexer.RPAREN) {
+			p.nextToken()
+			elements = append(elements, p.parseExpr(LOWEST))
+			for p.peekTokenIs(lexer.COMMA) {
+				p.nextToken() // consume ','
+				if p.peekTokenIs(lexer.RPAREN) {
+					break
+				}
+				p.nextToken()
+				elements = append(elements, p.parseExpr(LOWEST))
+			}
+		}
+		if !p.expectPeek(lexer.RPAREN) {
+			return nil
+		}
+		pattern := &ast.CallExpr{
+			Position: pos,
+			Function: &ast.IdentExpr{Position: pos, Name: name},
+			Args:     elements,
+		}
+
+		var ftype ast.Type
+		if p.peekTokenIs(lexer.COLON) {
+			p.nextToken()
+			p.nextToken()
+			ftype = p.parseType()
+		}
+
+		if !p.expectPeek(lexer.ASSIGN) {
+			return nil
+		}
+
+		p.nextToken()
+		val := p.parseExpr(LOWEST)
+
+		return &ast.LetStmt{
+			Position: pos,
+			Mutable:  mutable,
+			Pattern:  pattern,
+			Type:     ftype,
+			Value:    val,
+		}
+	}
 
 	var ftype ast.Type
 	if p.peekTokenIs(lexer.COLON) {
@@ -1320,12 +1466,32 @@ func (p *Parser) parseRefExpr() ast.Expr {
 }
 
 func (p *Parser) parseGroupedExpr() ast.Expr {
+	pos := ast.Position{File: p.curToken.File, Line: p.curToken.Line, Col: p.curToken.Col}
+	if p.peekTokenIs(lexer.RPAREN) {
+		p.nextToken() // consume ')'
+		return &ast.TupleExpr{Position: pos, Elements: []ast.Expr{}}
+	}
 	p.nextToken()
-	expr := p.parseExpr(LOWEST)
+	firstExpr := p.parseExpr(LOWEST)
+	if p.peekTokenIs(lexer.COMMA) {
+		elements := []ast.Expr{firstExpr}
+		for p.peekTokenIs(lexer.COMMA) {
+			p.nextToken() // consume ','
+			if p.peekTokenIs(lexer.RPAREN) {
+				break
+			}
+			p.nextToken()
+			elements = append(elements, p.parseExpr(LOWEST))
+		}
+		if !p.expectPeek(lexer.RPAREN) {
+			return nil
+		}
+		return &ast.TupleExpr{Position: pos, Elements: elements}
+	}
 	if !p.expectPeek(lexer.RPAREN) {
 		return nil
 	}
-	return expr
+	return firstExpr
 }
 
 func (p *Parser) parseBinaryExpr(left ast.Expr) ast.Expr {
@@ -1441,9 +1607,13 @@ func (p *Parser) parseIndexExpr(left ast.Expr) ast.Expr {
 
 func (p *Parser) parseSelectorExpr(left ast.Expr) ast.Expr {
 	pos := ast.Position{File: p.curToken.File, Line: p.curToken.Line, Col: p.curToken.Col}
+	if p.peekTokenIs(lexer.IDENT) || p.peekTokenIs(lexer.INT) {
+		p.nextToken()
+		field := p.curToken.Literal
+		return &ast.SelectorExpr{Position: pos, Target: left, Field: field}
+	}
 	p.expectPeek(lexer.IDENT)
-	field := p.curToken.Literal
-	return &ast.SelectorExpr{Position: pos, Target: left, Field: field}
+	return nil
 }
 
 func (p *Parser) parseQuestionExpr(left ast.Expr) ast.Expr {
