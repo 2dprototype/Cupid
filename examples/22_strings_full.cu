@@ -54,40 +54,40 @@ fn main() {
     println(sub2)
 
     println("--- Testing stdlib/strings Functions ---")
-    let has_cupid = contains(greeting, "Cupid")
+    let has_cupid = contains(&greeting, "Cupid")
     println("contains(greeting, 'Cupid'):")
     println(has_cupid)
 
-    let sw = starts_with(greeting, "Cup")
+    let sw = starts_with(&greeting, "Cup")
     println("starts_with(greeting, 'Cup'):")
     println(sw)
 
-    let ew = ends_with(greeting, "age")
+    let ew = ends_with(&greeting, "age")
     println("ends_with(greeting, 'age'):")
     println(ew)
 
-    let idx = index_of(greeting, "Lang")
+    let idx = index_of(&greeting, "Lang")
     println("index_of(greeting, 'Lang'):")
     println(idx)
 
-    let upper = to_upper("cupid rules")
+    let upper = to_upper(&"cupid rules")
     println("to_upper('cupid rules'):")
     println(upper)
 
-    let lower = to_lower("CUPID RULES")
+    let lower = to_lower(&"CUPID RULES")
     println("to_lower('CUPID RULES'):")
     println(lower)
 
-    let rep = repeat("Abc-", 3)
+    let rep = repeat(&"Abc-", 3)
     println("repeat('Abc-', 3):")
     println(rep)
 
-    let rep_str = replace("banana", "a", "o")
+    let rep_str = replace(&"banana", "a", "o")
     println("replace('banana', 'a', 'o'):")
     println(rep_str)
 
     let padded = "   Trimmed Text   "
-    let trimmed = trim_space(padded)
+    let trimmed = trim_space(&padded)
     println("trim_space('   Trimmed Text   '):")
     println(trimmed)
 }

@@ -72,6 +72,7 @@ func (b *Backend) Generate() (string, error) {
 	dataBuf.WriteString("    _cupid_fmt_u64 db '%llu', 0\n")
 	dataBuf.WriteString("    _cupid_fmt_f64 db '%f', 0\n")
 	dataBuf.WriteString("    _cupid_fmt_str db '%s', 0\n")
+	dataBuf.WriteString("    _cupid_fmt_str_len db '%.*s', 0\n")
 	dataBuf.WriteString("    _cupid_fmt_bounds_panic db 'panic: string index out of bounds: index %lld, len %lld', 13, 10, 0\n")
 	dataBuf.WriteString("    _cupid_lbracket db '[', 0\n")
 	dataBuf.WriteString("    _cupid_rbracket db ']', 0\n")
@@ -392,10 +393,15 @@ func (b *Backend) generateStatement(stmt mir.Statement, fn *mir.MIRFunction, off
 			}
 			out.WriteString(fmt.Sprintf("    mov [rbp - %d], rcx\n", destOffset))
 		case *mir.IndexRvalue:
-			if src.Base.Type != nil && src.Base.Type.Kind == hir.TypeString {
+			if src.Base.Type != nil && (src.Base.Type.Kind == hir.TypeString || (src.Base.Type.Kind == hir.TypePointer && src.Base.Type.ElemType != nil && src.Base.Type.ElemType.Kind == hir.TypeString)) {
 				baseOffset := offsets[src.Base.LocalID]
 				b.loadOperandToReg(src.Index, "rcx", offsets, out)
-				out.WriteString("    mov rax, [rbp - " + fmt.Sprintf("%d", baseOffset) + "]\n")
+				if src.Base.Type.Kind == hir.TypePointer {
+					out.WriteString(fmt.Sprintf("    mov rax, [rbp - %d]\n", baseOffset))
+					out.WriteString("    mov rax, [rax]\n")
+				} else {
+					out.WriteString(fmt.Sprintf("    mov rax, [rbp - %d]\n", baseOffset))
+				}
 				out.WriteString("    movzx rax, byte [rax + rcx]\n")
 				out.WriteString(fmt.Sprintf("    mov [rbp - %d], rax\n", destOffset))
 				break
@@ -440,19 +446,29 @@ func (b *Backend) generateStatement(stmt mir.Statement, fn *mir.MIRFunction, off
 				out.WriteString(fmt.Sprintf("    mov [rbp - %d], rdx\n", destOffset))
 			}
 		case *mir.SliceRvalue:
-			if (src.Type != nil && src.Type.Kind == hir.TypeString) || (src.Base.Type != nil && src.Base.Type.Kind == hir.TypeString) {
+			if (src.Type != nil && src.Type.Kind == hir.TypeString) || (src.Base.Type != nil && (src.Base.Type.Kind == hir.TypeString || (src.Base.Type.Kind == hir.TypePointer && src.Base.Type.ElemType != nil && src.Base.Type.ElemType.Kind == hir.TypeString))) {
 				if src.Base.Kind == mir.OpLocal {
 					baseOffset := offsets[src.Base.LocalID]
-					out.WriteString(fmt.Sprintf("    mov rax, [rbp - %d]\n", baseOffset))
+					if src.Base.Type != nil && src.Base.Type.Kind == hir.TypePointer {
+						out.WriteString(fmt.Sprintf("    mov rax, [rbp - %d]\n", baseOffset))
+						if src.High != nil {
+							b.loadOperandToReg(*src.High, "r8", offsets, out)
+						} else {
+							out.WriteString("    mov r8, [rax + 8]\n")
+						}
+						out.WriteString("    mov rax, [rax]\n")
+					} else {
+						out.WriteString(fmt.Sprintf("    mov rax, [rbp - %d]\n", baseOffset))
+						if src.High != nil {
+							b.loadOperandToReg(*src.High, "r8", offsets, out)
+						} else {
+							out.WriteString(fmt.Sprintf("    mov r8, [rbp - %d + 8]\n", baseOffset))
+						}
+					}
 					if src.Low != nil {
 						b.loadOperandToReg(*src.Low, "rdx", offsets, out)
 					} else {
 						out.WriteString("    xor rdx, rdx\n")
-					}
-					if src.High != nil {
-						b.loadOperandToReg(*src.High, "r8", offsets, out)
-					} else {
-						out.WriteString(fmt.Sprintf("    mov r8, [rbp - %d + 8]\n", baseOffset))
 					}
 					out.WriteString("    add rax, rdx\n")
 					out.WriteString("    sub r8, rdx\n")
@@ -506,6 +522,14 @@ func (b *Backend) generateStatement(stmt mir.Statement, fn *mir.MIRFunction, off
 			out.WriteString(fmt.Sprintf("    mov [rbp - %d], rax\n", destOffset))
 		case *mir.DerefRvalue:
 			b.loadOperandToReg(src.Target, "rax", offsets, out)
+			if src.Type != nil && src.Type.ByteSize() > 8 {
+				numWords := (src.Type.ByteSize() + 7) / 8
+				for w := 0; w < numWords; w++ {
+					out.WriteString(fmt.Sprintf("    mov rcx, [rax + %d]\n", w*8))
+					out.WriteString(fmt.Sprintf("    mov [rbp - %d + %d], rcx\n", destOffset, w*8))
+				}
+				break
+			}
 			fKind := hir.TypeI64
 			if src.Type != nil {
 				fKind = src.Type.Kind
@@ -737,8 +761,14 @@ func (b *Backend) generateBinary(bin *mir.BinaryRvalue, destOffset int, offsets 
 	if isString {
 		if bin.Left.Kind == mir.OpLocal {
 			leftOffset := offsets[bin.Left.LocalID]
-			out.WriteString(fmt.Sprintf("    mov rcx, [rbp - %d]\n", leftOffset))
-			out.WriteString(fmt.Sprintf("    mov rdx, [rbp - %d + 8]\n", leftOffset))
+			if bin.Left.Type != nil && bin.Left.Type.Kind == hir.TypePointer {
+				out.WriteString(fmt.Sprintf("    mov rax, [rbp - %d]\n", leftOffset))
+				out.WriteString("    mov rcx, [rax]\n")
+				out.WriteString("    mov rdx, [rax + 8]\n")
+			} else {
+				out.WriteString(fmt.Sprintf("    mov rcx, [rbp - %d]\n", leftOffset))
+				out.WriteString(fmt.Sprintf("    mov rdx, [rbp - %d + 8]\n", leftOffset))
+			}
 		} else {
 			b.loadOperandToReg(bin.Left, "rcx", offsets, out)
 			cleanVal := strings.Trim(bin.Left.Constant, "\"")
@@ -746,8 +776,14 @@ func (b *Backend) generateBinary(bin *mir.BinaryRvalue, destOffset int, offsets 
 		}
 		if bin.Right.Kind == mir.OpLocal {
 			rightOffset := offsets[bin.Right.LocalID]
-			out.WriteString(fmt.Sprintf("    mov r8, [rbp - %d]\n", rightOffset))
-			out.WriteString(fmt.Sprintf("    mov r9, [rbp - %d + 8]\n", rightOffset))
+			if bin.Right.Type != nil && bin.Right.Type.Kind == hir.TypePointer {
+				out.WriteString(fmt.Sprintf("    mov rax, [rbp - %d]\n", rightOffset))
+				out.WriteString("    mov r8, [rax]\n")
+				out.WriteString("    mov r9, [rax + 8]\n")
+			} else {
+				out.WriteString(fmt.Sprintf("    mov r8, [rbp - %d]\n", rightOffset))
+				out.WriteString(fmt.Sprintf("    mov r9, [rbp - %d + 8]\n", rightOffset))
+			}
 		} else {
 			b.loadOperandToReg(bin.Right, "r8", offsets, out)
 			cleanVal := strings.Trim(bin.Right.Constant, "\"")
@@ -866,36 +902,53 @@ func (b *Backend) generateUnary(un *mir.UnaryRvalue, destOffset int, offsets map
 func (b *Backend) generateCall(call *mir.CallRvalue, destOffset int, offsets map[int]int, out *bytes.Buffer) {
 	// Handle built-ins: print, println, len
 	if call.FuncName == "len" {
-		if len(call.Args) > 0 && call.Args[0].Type != nil {
+		if len(call.Args) > 0 {
 			arg := call.Args[0]
-			if arg.Type.Kind == hir.TypeArray && arg.Type.Size > 0 {
+			if arg.Type != nil && arg.Type.Kind == hir.TypeArray && arg.Type.Size > 0 {
 				out.WriteString(fmt.Sprintf("    mov rax, %d\n", arg.Type.Size))
 				out.WriteString(fmt.Sprintf("    mov [rbp - %d], rax\n", destOffset))
 				return
-			} else if (arg.Type.Kind == hir.TypeArray && arg.Type.Size <= 0) || arg.Type.Kind == hir.TypeString {
-				if arg.Kind == mir.OpLocal {
-					argOffset := offsets[arg.LocalID]
+			}
+			if arg.Kind == mir.OpLocal {
+				argOffset := offsets[arg.LocalID]
+				if arg.Type != nil && arg.Type.Kind == hir.TypePointer {
+					out.WriteString(fmt.Sprintf("    mov rax, [rbp - %d]\n", argOffset))
+					out.WriteString("    mov rax, [rax + 8]\n")
+				} else {
 					out.WriteString(fmt.Sprintf("    mov rax, [rbp - %d + 8]\n", argOffset))
-					out.WriteString(fmt.Sprintf("    mov [rbp - %d], rax\n", destOffset))
-					return
 				}
-			} else if arg.Type.Kind == hir.TypePointer && arg.Type.ElemType != nil && (arg.Type.ElemType.Kind == hir.TypeString || (arg.Type.ElemType.Kind == hir.TypeArray && arg.Type.ElemType.Size <= 0)) {
+				out.WriteString(fmt.Sprintf("    mov [rbp - %d], rax\n", destOffset))
+				return
+			} else if arg.Kind == mir.OpConst && arg.Type != nil && arg.Type.Kind == hir.TypeString {
+				cleanVal := strings.Trim(arg.Constant, "\"")
+				out.WriteString(fmt.Sprintf("    mov rax, %d\n", len(cleanVal)))
+				out.WriteString(fmt.Sprintf("    mov [rbp - %d], rax\n", destOffset))
+				return
+			} else {
 				b.loadOperandToReg(arg, "rax", offsets, out)
 				out.WriteString("    mov rax, [rax + 8]\n")
 				out.WriteString(fmt.Sprintf("    mov [rbp - %d], rax\n", destOffset))
 				return
 			}
 		}
+		out.WriteString(fmt.Sprintf("    mov qword [rbp - %d], 0\n", destOffset))
+		return
 	}
 
 	if call.FuncName == "print" || call.FuncName == "println" {
 		if len(call.Args) > 0 {
 			arg := call.Args[0]
-			if arg.Type != nil && arg.Type.Kind == hir.TypeString {
+			if arg.Type != nil && (arg.Type.Kind == hir.TypeString || (arg.Type.Kind == hir.TypePointer && arg.Type.ElemType != nil && arg.Type.ElemType.Kind == hir.TypeString)) {
 				if arg.Kind == mir.OpLocal {
 					argOffset := offsets[arg.LocalID]
-					out.WriteString(fmt.Sprintf("    mov rcx, [rbp - %d]\n", argOffset))
-					out.WriteString(fmt.Sprintf("    mov rdx, [rbp - %d + 8]\n", argOffset))
+					if arg.Type.Kind == hir.TypePointer {
+						out.WriteString(fmt.Sprintf("    mov rax, [rbp - %d]\n", argOffset))
+						out.WriteString("    mov rcx, [rax]\n")
+						out.WriteString("    mov rdx, [rax + 8]\n")
+					} else {
+						out.WriteString(fmt.Sprintf("    mov rcx, [rbp - %d]\n", argOffset))
+						out.WriteString(fmt.Sprintf("    mov rdx, [rbp - %d + 8]\n", argOffset))
+					}
 				} else {
 					b.loadOperandToReg(arg, "rcx", offsets, out)
 					cleanVal := strings.Trim(arg.Constant, "\"")
@@ -939,9 +992,17 @@ func (b *Backend) generateCall(call *mir.CallRvalue, destOffset int, offsets map
 				} else {
 					out.WriteString(fmt.Sprintf("    movq %s, %s\n", paramRegs[i], xmmReg))
 				}
-			} else if arg.Type != nil && arg.Type.ByteSize() > 8 && arg.Kind == mir.OpLocal {
-				argOffset := offsets[arg.LocalID]
-				out.WriteString(fmt.Sprintf("    lea %s, [rbp - %d]\n", paramRegs[i], argOffset))
+			} else if arg.Type != nil && arg.Type.ByteSize() > 8 {
+				if arg.Kind == mir.OpLocal {
+					argOffset := offsets[arg.LocalID]
+					out.WriteString(fmt.Sprintf("    lea %s, [rbp - %d]\n", paramRegs[i], argOffset))
+				} else if arg.Kind == mir.OpConst && arg.Type.Kind == hir.TypeString {
+					cleanVal := strings.Trim(arg.Constant, "\"")
+					label := b.getStringLabel(cleanVal)
+					out.WriteString(fmt.Sprintf("    lea %s, [%s_hdr]\n", paramRegs[i], label))
+				} else {
+					b.loadOperandToReg(arg, paramRegs[i], offsets, out)
+				}
 			} else {
 				b.loadOperandToReg(arg, paramRegs[i], offsets, out)
 			}
@@ -1380,12 +1441,9 @@ func (b *Backend) emitRuntimeHelpers(out *bytes.Buffer) {
 	out.WriteString("    push rbp\n")
 	out.WriteString("    mov rbp, rsp\n")
 	out.WriteString("    sub rsp, 48\n")
-	out.WriteString("    mov r8, rdx ; len\n")
-	out.WriteString("    mov rdx, rcx ; ptr\n")
-	out.WriteString("    mov rcx, [_cupid_stdout]\n")
-	out.WriteString("    lea r9, [_cupid_bytes_written]\n")
-	out.WriteString("    mov qword [rsp + 32], 0\n")
-	out.WriteString("    call [WriteFile]\n")
+	out.WriteString("    mov r8, rcx\n")
+	out.WriteString("    lea rcx, [_cupid_fmt_str_len]\n")
+	out.WriteString("    call [printf]\n")
 	out.WriteString("    mov rsp, rbp\n")
 	out.WriteString("    pop rbp\n")
 	out.WriteString("    ret\n\n")
@@ -1613,32 +1671,32 @@ func (b *Backend) emitRuntimeHelpers(out *bytes.Buffer) {
 	out.WriteString("    inc rcx\n")
 	out.WriteString("    call _cupid_alloc\n")
 	out.WriteString("    mov [rbp - 40], rax\n")
-	out.WriteString("    mov rsi, [rbp - 8]\n")
-	out.WriteString("    mov rdi, [rbp - 40]\n")
+	out.WriteString("    mov r10, [rbp - 8]\n")
+	out.WriteString("    mov r11, [rbp - 40]\n")
 	out.WriteString("    mov rcx, [rbp - 16]\n")
 	out.WriteString("    test rcx, rcx\n")
 	out.WriteString("    jz .cscs_s2\n")
 	out.WriteString(".cscs_s1_loop:\n")
-	out.WriteString("    mov al, [rsi]\n")
-	out.WriteString("    mov [rdi], al\n")
-	out.WriteString("    inc rsi\n")
-	out.WriteString("    inc rdi\n")
+	out.WriteString("    mov al, [r10]\n")
+	out.WriteString("    mov [r11], al\n")
+	out.WriteString("    inc r10\n")
+	out.WriteString("    inc r11\n")
 	out.WriteString("    dec rcx\n")
 	out.WriteString("    jnz .cscs_s1_loop\n")
 	out.WriteString(".cscs_s2:\n")
-	out.WriteString("    mov rsi, [rbp - 24]\n")
+	out.WriteString("    mov r10, [rbp - 24]\n")
 	out.WriteString("    mov rcx, [rbp - 32]\n")
 	out.WriteString("    test rcx, rcx\n")
 	out.WriteString("    jz .cscs_done\n")
 	out.WriteString(".cscs_s2_loop:\n")
-	out.WriteString("    mov al, [rsi]\n")
-	out.WriteString("    mov [rdi], al\n")
-	out.WriteString("    inc rsi\n")
-	out.WriteString("    inc rdi\n")
+	out.WriteString("    mov al, [r10]\n")
+	out.WriteString("    mov [r11], al\n")
+	out.WriteString("    inc r10\n")
+	out.WriteString("    inc r11\n")
 	out.WriteString("    dec rcx\n")
 	out.WriteString("    jnz .cscs_s2_loop\n")
 	out.WriteString(".cscs_done:\n")
-	out.WriteString("    mov byte [rdi], 0\n")
+	out.WriteString("    mov byte [r11], 0\n")
 	out.WriteString("    mov rax, [rbp - 40]\n")
 	out.WriteString("    mov rdx, [rbp - 16]\n")
 	out.WriteString("    add rdx, [rbp - 32]\n")
@@ -1648,26 +1706,26 @@ func (b *Backend) emitRuntimeHelpers(out *bytes.Buffer) {
 
 	// _cupid_str_eq_slice: RCX = ptr1, RDX = len1, R8 = ptr2, R9 = len2 -> RAX = 1 or 0
 	out.WriteString("_cupid_str_eq_slice:\n")
-	out.WriteString("    push rbp\n")
-	out.WriteString("    mov rbp, rsp\n")
 	out.WriteString("    cmp rdx, r9\n")
 	out.WriteString("    jne .cseqs_false\n")
-	out.WriteString("    mov rsi, rcx\n")
-	out.WriteString("    mov rdi, r8\n")
-	out.WriteString("    mov rcx, rdx\n")
-	out.WriteString("    test rcx, rcx\n")
+	out.WriteString("    test rdx, rdx\n")
 	out.WriteString("    jz .cseqs_true\n")
-	out.WriteString("    repe cmpsb\n")
+	out.WriteString("    mov r10, rcx\n")
+	out.WriteString("    mov r11, r8\n")
+	out.WriteString("    mov rcx, rdx\n")
+	out.WriteString(".cseqs_loop:\n")
+	out.WriteString("    mov al, [r10]\n")
+	out.WriteString("    cmp al, [r11]\n")
 	out.WriteString("    jne .cseqs_false\n")
+	out.WriteString("    inc r10\n")
+	out.WriteString("    inc r11\n")
+	out.WriteString("    dec rcx\n")
+	out.WriteString("    jnz .cseqs_loop\n")
 	out.WriteString(".cseqs_true:\n")
 	out.WriteString("    mov rax, 1\n")
-	out.WriteString("    mov rsp, rbp\n")
-	out.WriteString("    pop rbp\n")
 	out.WriteString("    ret\n")
 	out.WriteString(".cseqs_false:\n")
 	out.WriteString("    xor rax, rax\n")
-	out.WriteString("    mov rsp, rbp\n")
-	out.WriteString("    pop rbp\n")
 	out.WriteString("    ret\n\n")
 
 	// _cupid_str_concat: RCX = s1, RDX = s2 -> RAX = new heap string
@@ -1687,32 +1745,32 @@ func (b *Backend) emitRuntimeHelpers(out *bytes.Buffer) {
 	out.WriteString("    inc rcx\n")
 	out.WriteString("    call _cupid_alloc\n")
 	out.WriteString("    mov [rbp - 40], rax\n")
-	out.WriteString("    mov rsi, [rbp - 8]\n")
-	out.WriteString("    mov rdi, [rbp - 40]\n")
+	out.WriteString("    mov r10, [rbp - 8]\n")
+	out.WriteString("    mov r11, [rbp - 40]\n")
 	out.WriteString("    mov rcx, [rbp - 24]\n")
 	out.WriteString("    cmp rcx, 0\n")
 	out.WriteString("    je .csc_s2\n")
 	out.WriteString(".csc_s1_loop:\n")
-	out.WriteString("    mov al, [rsi]\n")
-	out.WriteString("    mov [rdi], al\n")
-	out.WriteString("    inc rsi\n")
-	out.WriteString("    inc rdi\n")
+	out.WriteString("    mov al, [r10]\n")
+	out.WriteString("    mov [r11], al\n")
+	out.WriteString("    inc r10\n")
+	out.WriteString("    inc r11\n")
 	out.WriteString("    dec rcx\n")
 	out.WriteString("    jnz .csc_s1_loop\n")
 	out.WriteString(".csc_s2:\n")
-	out.WriteString("    mov rsi, [rbp - 16]\n")
+	out.WriteString("    mov r10, [rbp - 16]\n")
 	out.WriteString("    mov rcx, [rbp - 32]\n")
 	out.WriteString("    cmp rcx, 0\n")
 	out.WriteString("    je .csc_done\n")
 	out.WriteString(".csc_s2_loop:\n")
-	out.WriteString("    mov al, [rsi]\n")
-	out.WriteString("    mov [rdi], al\n")
-	out.WriteString("    inc rsi\n")
-	out.WriteString("    inc rdi\n")
+	out.WriteString("    mov al, [r10]\n")
+	out.WriteString("    mov [r11], al\n")
+	out.WriteString("    inc r10\n")
+	out.WriteString("    inc r11\n")
 	out.WriteString("    dec rcx\n")
 	out.WriteString("    jnz .csc_s2_loop\n")
 	out.WriteString(".csc_done:\n")
-	out.WriteString("    mov byte [rdi], 0\n")
+	out.WriteString("    mov byte [r11], 0\n")
 	out.WriteString("    mov rax, [rbp - 40]\n")
 	out.WriteString("    mov rsp, rbp\n")
 	out.WriteString("    pop rbp\n")
@@ -1723,23 +1781,23 @@ func (b *Backend) emitRuntimeHelpers(out *bytes.Buffer) {
 	out.WriteString("    push rbp\n")
 	out.WriteString("    mov rbp, rsp\n")
 	out.WriteString("    sub rsp, 32\n")
-	out.WriteString("    mov rsi, rcx\n")
-	out.WriteString("    mov rdi, rdx\n")
-	out.WriteString("    cmp rsi, rdi\n")
+	out.WriteString("    mov r10, rcx\n")
+	out.WriteString("    mov r11, rdx\n")
+	out.WriteString("    cmp r10, r11\n")
 	out.WriteString("    je .cseq_true\n")
-	out.WriteString("    cmp rsi, 0\n")
+	out.WriteString("    cmp r10, 0\n")
 	out.WriteString("    je .cseq_false\n")
-	out.WriteString("    cmp rdi, 0\n")
+	out.WriteString("    cmp r11, 0\n")
 	out.WriteString("    je .cseq_false\n")
 	out.WriteString(".cseq_loop:\n")
-	out.WriteString("    mov al, [rsi]\n")
-	out.WriteString("    mov dl, [rdi]\n")
+	out.WriteString("    mov al, [r10]\n")
+	out.WriteString("    mov dl, [r11]\n")
 	out.WriteString("    cmp al, dl\n")
 	out.WriteString("    jne .cseq_false\n")
 	out.WriteString("    cmp al, 0\n")
 	out.WriteString("    je .cseq_true\n")
-	out.WriteString("    inc rsi\n")
-	out.WriteString("    inc rdi\n")
+	out.WriteString("    inc r10\n")
+	out.WriteString("    inc r11\n")
 	out.WriteString("    jmp .cseq_loop\n")
 	out.WriteString(".cseq_true:\n")
 	out.WriteString("    mov rax, 1\n")
@@ -1791,21 +1849,21 @@ func (b *Backend) emitRuntimeHelpers(out *bytes.Buffer) {
 	out.WriteString("    inc rcx\n")
 	out.WriteString("    call _cupid_alloc\n")
 	out.WriteString("    mov [rbp - 40], rax\n")
-	out.WriteString("    mov rsi, [rbp - 8]\n")
-	out.WriteString("    add rsi, [rbp - 16]\n")
-	out.WriteString("    mov rdi, [rbp - 40]\n")
+	out.WriteString("    mov r10, [rbp - 8]\n")
+	out.WriteString("    add r10, [rbp - 16]\n")
+	out.WriteString("    mov r11, [rbp - 40]\n")
 	out.WriteString("    mov rcx, [rbp - 32]\n")
 	out.WriteString("    cmp rcx, 0\n")
 	out.WriteString("    je .css_done\n")
 	out.WriteString(".css_copy_loop:\n")
-	out.WriteString("    mov al, [rsi]\n")
-	out.WriteString("    mov [rdi], al\n")
-	out.WriteString("    inc rsi\n")
-	out.WriteString("    inc rdi\n")
+	out.WriteString("    mov al, [r10]\n")
+	out.WriteString("    mov [r11], al\n")
+	out.WriteString("    inc r10\n")
+	out.WriteString("    inc r11\n")
 	out.WriteString("    dec rcx\n")
 	out.WriteString("    jnz .css_copy_loop\n")
 	out.WriteString(".css_done:\n")
-	out.WriteString("    mov byte [rdi], 0\n")
+	out.WriteString("    mov byte [r11], 0\n")
 	out.WriteString("    mov rax, [rbp - 40]\n")
 	out.WriteString("    mov rsp, rbp\n")
 	out.WriteString("    pop rbp\n")

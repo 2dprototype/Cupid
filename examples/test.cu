@@ -12,8 +12,13 @@
 // }
 
 fn main() {
-    let arr: []u8 = [1,2,3,4,5,6]
+    // let arr: []u8 = [1,2,3,4,5,6]
     
-    println(arr)
-    println(len(arr))
+    // println(arr)
+    // println(len(arr))
+    mut str = "Hello"
+    mut b = &str
+    *b = "U"
+    println(str)
+    println(str[0])
 }

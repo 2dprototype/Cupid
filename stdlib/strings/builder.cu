@@ -23,12 +23,7 @@ fn (sb: &StringBuilder) is_empty() -> bool {
 }
 
 fn (sb: &mut StringBuilder) push_str(s: string) {
-    mut i = 0
-    let str_len = len(s)
-    for i < str_len {
-        sb.length += 1
-        i += 1
-    }
+    sb.length += len(s)
 }
 
 fn (sb: &mut StringBuilder) clear() {
