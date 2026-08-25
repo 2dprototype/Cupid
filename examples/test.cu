@@ -1,17 +1,17 @@
-fn print_num(num: &i64) {
-    println(*num) // i think the problem crasesh in this line for some reason
+// find the bug and give me solution
+// also check: examples/test.cu and examples/test.asm to find the bug quickly
+
+fn greet(name: &string) {
+    println("test")
+    let h = "Hello, " + *name // this line craseshes
+    println(h) // this prints only "Hello, "
 }
 
-// fn print_num(num: &i64) -> void {
-    // println(*num) // but somehow this works when i put return type as void
-// }
-
-// fn print_num(num: &i64) {
-    // println(num) // even this doesnt crash when we dont use *num
-// }
-
 fn main() {
-    println("Printing num...")
-    print_num(&100)
-    println("End")
+    let title = "Cupid Language Spec"
+
+    println("=== Borrowing &string ===")
+    greet(&title)
+
+    println("=== END ===")
 }

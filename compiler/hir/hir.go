@@ -1059,11 +1059,10 @@ func (l *Lowerer) lowerExpr(expr ast.Expr, mod *modules.Module) HIRExpr {
 		var elemType *HIRType
 		if target.Type() != nil && target.Type().ElemType != nil {
 			elemType = target.Type().ElemType
+		} else if hirType != nil {
+			elemType = hirType   // fall back to the type-checker's cached result instead of nil
 		}
-		return &HIRDerefExpr{
-			Target: target,
-			Typ:    elemType,
-		}
+		return &HIRDerefExpr{Target: target, Typ: elemType}
 	case *ast.IndexExpr:
 		target := l.lowerExpr(e.Target, mod)
 		idx := l.lowerExpr(e.Index, mod)

@@ -539,8 +539,15 @@ func (b *Backend) generateStatement(stmt mir.Statement, fn *mir.MIRFunction, off
 			out.WriteString(fmt.Sprintf("    mov [rbp - %d], rax\n", destOffset))
 		case *mir.DerefRvalue:
 			b.loadOperandToReg(src.Target, "rax", offsets, out)
-			if src.Type != nil && src.Type.ByteSize() > 8 {
-				numWords := (src.Type.ByteSize() + 7) / 8
+			sz := 8
+			if src.Type != nil {
+				sz = src.Type.ByteSize()
+			} else if src.Target.Type != nil && src.Target.Type.ElemType != nil {
+				// fall back to the pointee's declared size if Type wasn't propagated
+				sz = src.Target.Type.ElemType.ByteSize()
+			}
+			if sz > 8 {
+				numWords := (sz + 7) / 8
 				for w := 0; w < numWords; w++ {
 					out.WriteString(fmt.Sprintf("    mov rcx, [rax + %d]\n", w*8))
 					out.WriteString(fmt.Sprintf("    mov [rbp - %d + %d], rcx\n", destOffset, w*8))
@@ -1069,6 +1076,9 @@ func (b *Backend) generateCall(call *mir.CallRvalue, destOffset int, offsets map
 	out.WriteString(fmt.Sprintf("    call %s\n", targetName))
 	if call.Type != nil && isFloatKind(call.Type.Kind) {
 		b.storeXMMToLocal("xmm0", call.Type.Kind, destOffset, out)
+	} else if call.Type != nil && call.Type.ByteSize() == 16 {
+		out.WriteString(fmt.Sprintf("    mov [rbp - %d], rax\n", destOffset))
+		out.WriteString(fmt.Sprintf("    mov [rbp - %d + 8], rdx\n", destOffset))
 	} else if call.Type != nil && call.Type.ByteSize() > 8 {
 		numWords := (call.Type.ByteSize() + 7) / 8
 		for w := 0; w < numWords; w++ {
@@ -1163,6 +1173,17 @@ func (b *Backend) generateTerminator(term mir.Terminator, fn *mir.MIRFunction, o
 					out.WriteString("    movd rax, xmm0\n")
 				} else {
 					out.WriteString("    movq rax, xmm0\n")
+				}
+			} else if fn.ReturnType != nil && fn.ReturnType.ByteSize() == 16 {
+				if t.Value.Kind == mir.OpLocal {
+					valOffset := offsets[t.Value.LocalID]
+					out.WriteString(fmt.Sprintf("    mov rax, [rbp - %d]\n", valOffset))
+					out.WriteString(fmt.Sprintf("    mov rdx, [rbp - %d + 8]\n", valOffset))
+				} else if t.Value.Kind == mir.OpConst && fn.ReturnType.Kind == hir.TypeString {
+					cleanVal := strings.Trim(t.Value.Constant, "\"")
+					label := b.getStringLabel(cleanVal)
+					out.WriteString(fmt.Sprintf("    lea rax, [%s]\n", label))
+					out.WriteString(fmt.Sprintf("    mov rdx, %d\n", len(cleanVal)))
 				}
 			} else if fn.ReturnType != nil && fn.ReturnType.ByteSize() > 8 && t.Value.Kind == mir.OpLocal {
 				valOffset := offsets[t.Value.LocalID]
