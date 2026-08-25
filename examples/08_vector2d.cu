@@ -2,8 +2,8 @@
 // Demonstrates how immutable borrowing (&Vec2) allows variables to be used multiple times without move.
 
 struct Vec2 {
-    x i32
-    y i32
+    x: i64
+    y: i64
 }
 
 fn vec2_add(v1: &Vec2, v2: &Vec2) -> Vec2 {
@@ -13,11 +13,11 @@ fn vec2_add(v1: &Vec2, v2: &Vec2) -> Vec2 {
     }
 }
 
-fn vec2_dot(v1: &Vec2, v2: &Vec2) -> i32 {
+fn vec2_dot(v1: &Vec2, v2: &Vec2) -> i64 {
     return (v1.x * v2.x) + (v1.y * v2.y)
 }
 
-fn vec2_length_squared(v: &Vec2) -> i32 {
+fn vec2_length_squared(v: &Vec2) -> i64 {
     return (v.x * v.x) + (v.y * v.y)
 }
 

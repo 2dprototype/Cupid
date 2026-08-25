@@ -672,6 +672,14 @@ func (l *MIRLowerer) lowerExpr(expr hir.HIRExpr, ctx *fnContext) Operand {
 		return Operand{Kind: OpLocal, LocalID: destLoc.ID, Type: destLoc.Type}
 	case *hir.HIRRefExpr:
 		targetOp := l.lowerExpr(e.Target, ctx)
+		if targetOp.Kind != OpLocal {
+			tmpTarget := ctx.mirFn.NewLocal(targetOp.Type, "tmp_ref_target")
+			ctx.currBlock.Statements = append(ctx.currBlock.Statements, &AssignStmt{
+				Dest: tmpTarget,
+				Src:  &UseRvalue{Op: targetOp},
+			})
+			targetOp = Operand{Kind: OpLocal, LocalID: tmpTarget.ID, Type: tmpTarget.Type}
+		}
 		destLoc := ctx.mirFn.NewLocal(e.Typ, "tmp_ref")
 		ctx.currBlock.Statements = append(ctx.currBlock.Statements, &AssignStmt{
 			Dest: destLoc,

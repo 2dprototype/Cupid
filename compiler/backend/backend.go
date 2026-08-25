@@ -534,7 +534,7 @@ func (b *Backend) generateStatement(stmt mir.Statement, fn *mir.MIRFunction, off
 				targetOffset := offsets[src.Target.LocalID]
 				out.WriteString(fmt.Sprintf("    lea rax, [rbp - %d]\n", targetOffset))
 			} else {
-				b.loadOperandToReg(src.Target, "rax", offsets, out)
+				out.WriteString(fmt.Sprintf("    lea rax, [global_%s]\n", src.Target.Constant))
 			}
 			out.WriteString(fmt.Sprintf("    mov [rbp - %d], rax\n", destOffset))
 		case *mir.DerefRvalue:
@@ -1661,10 +1661,11 @@ func (b *Backend) emitRuntimeHelpers(out *bytes.Buffer) {
 	out.WriteString("    push rbp\n")
 	out.WriteString("    mov rbp, rsp\n")
 	out.WriteString("    sub rsp, 48\n")
-	out.WriteString("    mov r8, rcx ; bytes\n")
+	out.WriteString("    mov [rbp - 8], rcx ; save bytes\n")
 	out.WriteString("    call [GetProcessHeap]\n")
 	out.WriteString("    mov rcx, rax ; hHeap\n")
 	out.WriteString("    mov edx, 8   ; HEAP_ZERO_MEMORY\n")
+	out.WriteString("    mov r8, [rbp - 8] ; bytes\n")
 	out.WriteString("    call [HeapAlloc]\n")
 	out.WriteString("    mov rsp, rbp\n")
 	out.WriteString("    pop rbp\n")
@@ -1675,10 +1676,11 @@ func (b *Backend) emitRuntimeHelpers(out *bytes.Buffer) {
 	out.WriteString("    push rbp\n")
 	out.WriteString("    mov rbp, rsp\n")
 	out.WriteString("    sub rsp, 48\n")
-	out.WriteString("    mov r8, rcx ; lpMem\n")
+	out.WriteString("    mov [rbp - 8], rcx ; save lpMem\n")
 	out.WriteString("    call [GetProcessHeap]\n")
 	out.WriteString("    mov rcx, rax ; hHeap\n")
 	out.WriteString("    xor edx, edx ; dwFlags\n")
+	out.WriteString("    mov r8, [rbp - 8] ; lpMem\n")
 	out.WriteString("    call [HeapFree]\n")
 	out.WriteString("    mov rsp, rbp\n")
 	out.WriteString("    pop rbp\n")
