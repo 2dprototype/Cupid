@@ -1135,6 +1135,20 @@ func (b *Backend) generatePrintOperand(arg mir.Operand, offsets map[int]int, out
 				return
 			}
 		}
+		if arg.Type.ElemType != nil {
+			if _, ok := b.prog.Structs[arg.Type.ElemType.Name]; ok {
+				out.WriteString("    lea rcx, [_cupid_ampersand]\n")
+				out.WriteString("    call _cupid_print_str\n")
+				b.generatePrintStruct(arg, offsets, out)
+				return
+			}
+		}
+		if _, ok := b.prog.Structs[arg.Type.Name]; ok {
+			out.WriteString("    lea rcx, [_cupid_ampersand]\n")
+			out.WriteString("    call _cupid_print_str\n")
+			b.generatePrintStruct(arg, offsets, out)
+			return
+		}
 		b.loadOperandToReg(arg, "rcx", offsets, out)
 		out.WriteString("    call _cupid_print_i64\n")
 

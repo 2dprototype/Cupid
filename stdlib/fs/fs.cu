@@ -13,17 +13,17 @@ export fn open_read(path: string) -> File {
         ; FILE_SHARE_READ = 1
         ; OPEN_EXISTING = 3
         ; FILE_ATTRIBUTE_NORMAL = 0x80
-        mov rcx, [rbp - 8]       ; path string pointer
+        mov rcx, [rbp - 16]      ; path string pointer (first 8 bytes of 16-byte string)
         mov rdx, 80000000h       ; dwDesiredAccess (GENERIC_READ)
         mov r8, 1                ; dwShareMode (FILE_SHARE_READ)
         mov r9, 0                ; lpSecurityAttributes (NULL)
-        sub rsp, 32 + 24         ; shadow space + 3 extra stack parameters
+        sub rsp, 64              ; 32 shadow + 24 args + 8 alignment = 64 (16-byte aligned)
         mov qword [rsp + 32], 3  ; dwCreationDisposition (OPEN_EXISTING)
         mov qword [rsp + 40], 80h; dwFlagsAndAttributes (FILE_ATTRIBUTE_NORMAL)
         mov qword [rsp + 48], 0  ; hTemplateFile (NULL)
         call [CreateFileA]
-        add rsp, 32 + 24
-        mov [rbp - 16], rax      ; store handle into file_handle
+        add rsp, 64
+        mov [rbp - 24], rax      ; store handle into file_handle
     }
 
     if file_handle == -1 || file_handle == 0 {
@@ -46,17 +46,17 @@ export fn create(path: string) -> File {
         ; GENERIC_WRITE = 0x40000000
         ; CREATE_ALWAYS = 2
         ; FILE_ATTRIBUTE_NORMAL = 0x80
-        mov rcx, [rbp - 8]       ; path string pointer
+        mov rcx, [rbp - 16]      ; path string pointer (first 8 bytes of 16-byte string)
         mov rdx, 40000000h       ; dwDesiredAccess (GENERIC_WRITE)
         mov r8, 0                ; dwShareMode (0)
         mov r9, 0                ; lpSecurityAttributes (NULL)
-        sub rsp, 32 + 24
+        sub rsp, 64              ; 32 shadow + 24 args + 8 alignment = 64 (16-byte aligned)
         mov qword [rsp + 32], 2  ; dwCreationDisposition (CREATE_ALWAYS)
         mov qword [rsp + 40], 80h; dwFlagsAndAttributes (FILE_ATTRIBUTE_NORMAL)
         mov qword [rsp + 48], 0  ; hTemplateFile (NULL)
         call [CreateFileA]
-        add rsp, 32 + 24
-        mov [rbp - 16], rax      ; store handle into file_handle
+        add rsp, 64
+        mov [rbp - 24], rax      ; store handle into file_handle
     }
 
     if file_handle == -1 || file_handle == 0 {
@@ -82,15 +82,15 @@ export fn write_str(f: &File, text: string) -> bool {
     mut bytes_written: i64 = 0
 
     asm {
-        mov rcx, [rbp - 8]       ; &File
+        mov rcx, [rbp - 8]       ; &File pointer
         mov rcx, [rcx]           ; f.handle
-        mov rdx, [rbp - 16]      ; text string pointer
-        mov r8, [rbp - 24]       ; text_len
-        lea r9, [rbp - 32]       ; &bytes_written
-        sub rsp, 32 + 8
+        mov rdx, [rbp - 24]      ; text string pointer
+        mov r8, [rbp - 32]       ; text_len
+        lea r9, [rbp - 40]       ; &bytes_written
+        sub rsp, 48              ; 32 shadow + 8 arg + 8 alignment = 48 (16-byte aligned)
         mov qword [rsp + 32], 0  ; lpOverlapped (NULL)
         call [WriteFile]
-        add rsp, 32 + 8
+        add rsp, 48
     }
 
     return bytes_written == text_len
@@ -102,7 +102,7 @@ export fn close(f: &mut File) {
         asm {
             mov rcx, [rbp - 8]   ; &mut File
             mov rcx, [rcx]       ; f.handle
-            sub rsp, 32
+            sub rsp, 32          ; shadow space (16-byte aligned)
             call [CloseHandle]
             add rsp, 32
         }
@@ -115,25 +115,25 @@ export fn close(f: &mut File) {
 export fn exists(path: string) -> bool {
     mut attr: i64 = 0
     asm {
-        mov rcx, [rbp - 8]       ; path string pointer
-        sub rsp, 32
+        mov rcx, [rbp - 16]      ; path string pointer
+        sub rsp, 32              ; shadow space (16-byte aligned)
         call [GetFileAttributesA]
         add rsp, 32
-        mov [rbp - 16], rax      ; store return code into attr
+        mov [rbp - 24], rax      ; store return code into attr
     }
-    // INVALID_FILE_ATTRIBUTES = -1
-    return attr != -1
+    // INVALID_FILE_ATTRIBUTES = -1 (0xFFFFFFFF in 32-bit or -1 in 64-bit)
+    return attr != -1 && attr != 4294967295
 }
 
 // Deletes a file
 export fn remove(path: string) -> bool {
     mut success: i64 = 0
     asm {
-        mov rcx, [rbp - 8]       ; path string pointer
-        sub rsp, 32
+        mov rcx, [rbp - 16]      ; path string pointer
+        sub rsp, 32              ; shadow space (16-byte aligned)
         call [DeleteFileA]
         add rsp, 32
-        mov [rbp - 16], rax      ; store result into success
+        mov [rbp - 24], rax      ; store result into success
     }
     return success != 0
 }
