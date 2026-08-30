@@ -1,9 +1,5 @@
 // 46_keywords_and_syntax_enhancements.cu
-// Demonstrates new keywords and tokens: select with case/default, true/false boolean literals, in, and dyn trait objects
-
-trait Displayable {
-    fn display()
-}
+// Demonstrates new keywords and tokens: select with case/default, true/false boolean literals, in, and Rust-style self receiver methods
 
 struct Item {
     id: i64
@@ -11,13 +7,18 @@ struct Item {
     active: bool
 }
 
-impl Displayable for Item {
-    fn display() {
-        println("Displaying Item:")
-        println(this.id)
-        println(this.name)
-        println(this.active)
-    }
+// Receiver method declaration using Rust-like 'self' receiver
+fn (self: &Item) display() {
+    println("Displaying Item via self receiver method:")
+    println(self.id)
+    println(self.name)
+    println(self.active)
+}
+
+// Another method calling self.display()
+fn (self: &Item) print_info() {
+    println("Printing Item summary:")
+    self.display()
 }
 
 mut comm_ch = channel<string>()
@@ -45,7 +46,10 @@ fn main() {
         name: "Cupid Systems Unit"
         active: true
     }
+    
+    // Call receiver methods using standard dot syntax
     it.display()
+    it.print_info()
 
     // Concurrency with select (case, default)
     go background_task()
