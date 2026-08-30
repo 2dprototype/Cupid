@@ -146,25 +146,7 @@ func (bc *BorrowChecker) checkBlockStmt(bs *ast.BlockStmt, env *borrowEnv, mod *
 		env.nestingLevel--
 	}()
 
-	for i, stmt := range bs.Stmts {
-		// Clean up dead/expired borrows (Non-Lexical Lifetimes)
-		for bName, bList := range env.borrows {
-			newList := []Borrow{}
-			for _, b := range bList {
-				if b.BorrowedBy == "" {
-					continue // temporary borrow expired after its statement
-				}
-				if isIdentUsedInStmts(b.BorrowedBy, bs.Stmts[i:]) {
-					newList = append(newList, b)
-				}
-			}
-			if len(newList) == 0 {
-				delete(env.borrows, bName)
-			} else {
-				env.borrows[bName] = newList
-			}
-		}
-
+	for _, stmt := range bs.Stmts {
 		bc.checkStmt(stmt, env, mod)
 
 		// Clean up temporary anonymous borrows created during this statement
@@ -187,19 +169,24 @@ func (bc *BorrowChecker) checkBlockStmt(bs *ast.BlockStmt, env *borrowEnv, mod *
 func (bc *BorrowChecker) checkStmt(stmt ast.Stmt, env *borrowEnv, mod *modules.Module) {
 	switch s := stmt.(type) {
 	case *ast.LetStmt:
-		// 1. Check value expression
-		bc.checkExpr(s.Value, env, mod, false)
-
-		// 2. Register variable(s)
+		// 1. Register variable(s)
 		if s.Pattern != nil {
 			bc.collectPatternVars(s.Pattern, env)
 		} else {
 			env.declaredInBlock[env.nestingLevel] = append(env.declaredInBlock[env.nestingLevel], s.Name)
 		}
 
-		// 3. Detect if this variable is a borrow creation
+		// 2. Detect if this variable is a borrow creation
 		if ref, ok := s.Value.(*ast.RefExpr); ok {
 			if ident, ok := ref.Target.(*ast.IdentExpr); ok {
+				decl := bc.resolutions[ident]
+				if ref.Mutable {
+					if letStmt, ok := decl.(*ast.LetStmt); ok && !letStmt.Mutable {
+						bc.reportError(ref.Pos(), fmt.Sprintf("cannot borrow immutable variable %q as mutable (declare with 'mut' to make it mutable)", ident.Name), "E201", len(ident.Name))
+					} else if param, ok := decl.(*ast.Param); ok && !param.Mutable {
+						bc.reportError(ref.Pos(), fmt.Sprintf("cannot borrow immutable parameter %q as mutable", param.Name), "E201", len(param.Name))
+					}
+				}
 				kind := BorrowShared
 				if ref.Mutable {
 					kind = BorrowMut
@@ -211,8 +198,12 @@ func (bc *BorrowChecker) checkStmt(stmt ast.Stmt, env *borrowEnv, mod *modules.M
 					varName = s.Pattern.String()
 				}
 				bc.addBorrow(ident.Name, varName, kind, ref.Position, env)
+				return
 			}
 		}
+
+		// 3. Otherwise check value expression normally
+		bc.checkExpr(s.Value, env, mod, false)
 
 	case *ast.ReturnStmt:
 		if s.Value != nil {

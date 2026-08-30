@@ -1343,6 +1343,9 @@ func (p *Parser) parseExpr(precedence int) ast.Expr {
 	leftExpr := prefix()
 
 	for !p.peekTokenIs(lexer.EOF) && precedence < p.peekPrecedence() {
+		if p.peekToken.Line > p.curToken.Line {
+			break
+		}
 		infix := p.parseInfixFn(p.peekToken.Type)
 		if infix == nil {
 			return leftExpr

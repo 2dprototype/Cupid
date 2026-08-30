@@ -392,6 +392,9 @@ func (tc *TypeChecker) typeCheckStmt(stmt ast.Stmt, expectedRet ast.Type, mod *m
 			expectedType = s.Type
 		}
 		valType := tc.TypeCheckExpr(s.Value, mod)
+		if s.Type == nil && valType != nil {
+			s.Type = valType
+		}
 		if expectedType != nil && valType != nil {
 			// Array size check
 			if arrType, ok := expectedType.(*ast.ArrayType); ok {

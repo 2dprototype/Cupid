@@ -74,6 +74,7 @@ func (b *Backend) Generate() (string, error) {
 	dataBuf.WriteString("    _cupid_fmt_str db '%s', 0\n")
 	dataBuf.WriteString("    _cupid_fmt_str_len db '%.*s', 0\n")
 	dataBuf.WriteString("    _cupid_fmt_bounds_panic db 'panic: string index out of bounds: index %lld, len %lld', 13, 10, 0\n")
+	dataBuf.WriteString("    _cupid_fmt_ptr db '0x%llx', 0\n")
 	dataBuf.WriteString("    _cupid_lbracket db '[', 0\n")
 	dataBuf.WriteString("    _cupid_rbracket db ']', 0\n")
 	dataBuf.WriteString("    _cupid_lparen db '(', 0\n")
@@ -549,7 +550,6 @@ func (b *Backend) generateStatement(stmt mir.Statement, fn *mir.MIRFunction, off
 			if src.Type != nil {
 				sz = src.Type.ByteSize()
 			} else if src.Target.Type != nil && src.Target.Type.ElemType != nil {
-				// fall back to the pointee's declared size if Type wasn't propagated
 				sz = src.Target.Type.ElemType.ByteSize()
 			}
 			if sz > 8 {
@@ -563,29 +563,70 @@ func (b *Backend) generateStatement(stmt mir.Statement, fn *mir.MIRFunction, off
 			fKind := hir.TypeI64
 			if src.Type != nil {
 				fKind = src.Type.Kind
+			} else if src.Target.Type != nil && src.Target.Type.ElemType != nil {
+				fKind = src.Target.Type.ElemType.Kind
 			}
 			switch fKind {
 			case hir.TypeBool, hir.TypeU8:
 				out.WriteString("    movzx rcx, byte [rax]\n")
+				out.WriteString(fmt.Sprintf("    mov [rbp - %d], rcx\n", destOffset))
 			case hir.TypeI8:
 				out.WriteString("    movsx rcx, byte [rax]\n")
+				out.WriteString(fmt.Sprintf("    mov [rbp - %d], rcx\n", destOffset))
 			case hir.TypeU16:
 				out.WriteString("    movzx rcx, word [rax]\n")
+				out.WriteString(fmt.Sprintf("    mov [rbp - %d], rcx\n", destOffset))
 			case hir.TypeI16:
 				out.WriteString("    movsx rcx, word [rax]\n")
-			case hir.TypeU32, hir.TypeChar, hir.TypeF32:
+				out.WriteString(fmt.Sprintf("    mov [rbp - %d], rcx\n", destOffset))
+			case hir.TypeU32, hir.TypeChar:
 				out.WriteString("    mov ecx, dword [rax]\n")
+				out.WriteString(fmt.Sprintf("    mov [rbp - %d], rcx\n", destOffset))
 			case hir.TypeI32:
 				out.WriteString("    movsxd rcx, dword [rax]\n")
+				out.WriteString(fmt.Sprintf("    mov [rbp - %d], rcx\n", destOffset))
+			case hir.TypeF32:
+				out.WriteString("    movd xmm0, dword [rax]\n")
+				out.WriteString(fmt.Sprintf("    movd [rbp - %d], xmm0\n", destOffset))
+			case hir.TypeF64:
+				out.WriteString("    movsd xmm0, qword [rax]\n")
+				out.WriteString(fmt.Sprintf("    movsd [rbp - %d], xmm0\n", destOffset))
 			default:
 				out.WriteString("    mov rcx, [rax]\n")
+				out.WriteString(fmt.Sprintf("    mov [rbp - %d], rcx\n", destOffset))
 			}
-			out.WriteString(fmt.Sprintf("    mov [rbp - %d], rcx\n", destOffset))
 		case *mir.CastRvalue:
 			b.generateCast(src, destOffset, offsets, out)
 		}
 	case *mir.StoreStmt:
 		b.loadOperandToReg(s.Ptr, "rax", offsets, out)
+		if s.Val.Type != nil && s.Val.Type.ByteSize() > 8 {
+			numWords := (s.Val.Type.ByteSize() + 7) / 8
+			if s.Val.Kind == mir.OpLocal {
+				valOffset := offsets[s.Val.LocalID]
+				for w := 0; w < numWords; w++ {
+					out.WriteString(fmt.Sprintf("    mov rcx, [rbp - %d + %d]\n", valOffset, w*8))
+					out.WriteString(fmt.Sprintf("    mov [rax + %d], rcx\n", w*8))
+				}
+			} else if s.Val.Kind == mir.OpConst && s.Val.Type.Kind == hir.TypeString {
+				cleanVal := strings.Trim(s.Val.Constant, "\"")
+				strLabel := b.getStringLabel(cleanVal)
+				out.WriteString(fmt.Sprintf("    lea rcx, [%s]\n", strLabel))
+				out.WriteString("    mov [rax], rcx\n")
+				out.WriteString(fmt.Sprintf("    mov qword [rax + 8], %d\n", len(cleanVal)))
+			}
+			break
+		}
+		if s.Val.Type != nil && s.Val.Type.Kind == hir.TypeF64 {
+			b.loadOperandToXMM(s.Val, "xmm0", hir.TypeF64, offsets, out)
+			out.WriteString("    movsd [rax], xmm0\n")
+			break
+		}
+		if s.Val.Type != nil && s.Val.Type.Kind == hir.TypeF32 {
+			b.loadOperandToXMM(s.Val, "xmm0", hir.TypeF32, offsets, out)
+			out.WriteString("    movss [rax], xmm0\n")
+			break
+		}
 		b.loadOperandToReg(s.Val, "rcx", offsets, out)
 		valKind := hir.TypeI64
 		if s.Val.Type != nil {
@@ -596,7 +637,7 @@ func (b *Backend) generateStatement(stmt mir.Statement, fn *mir.MIRFunction, off
 			out.WriteString("    mov byte [rax], cl\n")
 		case hir.TypeI16, hir.TypeU16:
 			out.WriteString("    mov word [rax], cx\n")
-		case hir.TypeI32, hir.TypeU32, hir.TypeChar, hir.TypeF32:
+		case hir.TypeI32, hir.TypeU32, hir.TypeChar:
 			out.WriteString("    mov dword [rax], ecx\n")
 		default:
 			out.WriteString("    mov qword [rax], rcx\n")
@@ -1107,50 +1148,7 @@ func (b *Backend) generatePrintOperand(arg mir.Operand, offsets map[int]int, out
 		b.generatePrintStruct(arg, offsets, out)
 
 	case hir.TypePointer:
-		if arg.Type.ElemType != nil {
-			switch arg.Type.ElemType.Kind {
-			case hir.TypeString:
-				if arg.Kind == mir.OpLocal {
-					argOffset := offsets[arg.LocalID]
-					out.WriteString(fmt.Sprintf("    mov rax, [rbp - %d]\n", argOffset))
-					out.WriteString("    mov rcx, [rax]\n")
-					out.WriteString("    mov rdx, [rax + 8]\n")
-					out.WriteString("    call _cupid_print_str_len\n")
-				}
-				return
-			case hir.TypeStruct:
-				out.WriteString("    lea rcx, [_cupid_ampersand]\n")
-				out.WriteString("    call _cupid_print_str\n")
-				b.generatePrintStruct(arg, offsets, out)
-				return
-			case hir.TypeTuple:
-				out.WriteString("    lea rcx, [_cupid_ampersand]\n")
-				out.WriteString("    call _cupid_print_str\n")
-				b.generatePrintTuple(arg, offsets, out)
-				return
-			case hir.TypeArray:
-				out.WriteString("    lea rcx, [_cupid_ampersand]\n")
-				out.WriteString("    call _cupid_print_str\n")
-				b.generatePrintArray(arg, offsets, out)
-				return
-			}
-		}
-		if arg.Type.ElemType != nil {
-			if _, ok := b.prog.Structs[arg.Type.ElemType.Name]; ok {
-				out.WriteString("    lea rcx, [_cupid_ampersand]\n")
-				out.WriteString("    call _cupid_print_str\n")
-				b.generatePrintStruct(arg, offsets, out)
-				return
-			}
-		}
-		if _, ok := b.prog.Structs[arg.Type.Name]; ok {
-			out.WriteString("    lea rcx, [_cupid_ampersand]\n")
-			out.WriteString("    call _cupid_print_str\n")
-			b.generatePrintStruct(arg, offsets, out)
-			return
-		}
-		b.loadOperandToReg(arg, "rcx", offsets, out)
-		out.WriteString("    call _cupid_print_i64\n")
+		b.generatePrintPointer(arg, offsets, out)
 
 	default:
 		b.loadOperandToReg(arg, "rcx", offsets, out)
@@ -1158,17 +1156,112 @@ func (b *Backend) generatePrintOperand(arg mir.Operand, offsets map[int]int, out
 	}
 }
 
+func (b *Backend) generatePrintPointer(arg mir.Operand, offsets map[int]int, out *bytes.Buffer) {
+	elemType := arg.Type.ElemType
+	if elemType == nil {
+		if stDef, ok := b.prog.Structs[arg.Type.Name]; ok {
+			elemType = stDef.Type
+		}
+	}
+
+	if elemType == nil {
+		b.loadOperandToReg(arg, "rdx", offsets, out)
+		out.WriteString("    lea rcx, [_cupid_fmt_ptr]\n")
+		out.WriteString("    call [printf]\n")
+		return
+	}
+
+	out.WriteString("    lea rcx, [_cupid_ampersand]\n")
+	out.WriteString("    call _cupid_print_str\n")
+
+	switch elemType.Kind {
+	case hir.TypeStruct:
+		b.generatePrintStruct(arg, offsets, out)
+	case hir.TypeTuple:
+		b.generatePrintTuple(arg, offsets, out)
+	case hir.TypeArray:
+		b.generatePrintArray(arg, offsets, out)
+	case hir.TypeString:
+		if arg.Kind == mir.OpLocal {
+			argOffset := offsets[arg.LocalID]
+			out.WriteString("    lea rcx, [_cupid_double_quote]\n")
+			out.WriteString("    call _cupid_print_str\n")
+			out.WriteString(fmt.Sprintf("    mov rax, [rbp - %d]\n", argOffset))
+			out.WriteString("    mov rcx, [rax]\n")
+			out.WriteString("    mov rdx, [rax + 8]\n")
+			out.WriteString("    call _cupid_print_str_len\n")
+			out.WriteString("    lea rcx, [_cupid_double_quote]\n")
+			out.WriteString("    call _cupid_print_str\n")
+		}
+	case hir.TypeChar:
+		b.loadOperandToReg(arg, "rax", offsets, out)
+		out.WriteString("    movzx rcx, byte [rax]\n")
+		out.WriteString("    call _cupid_print_char_literal\n")
+	case hir.TypeBool:
+		b.loadOperandToReg(arg, "rax", offsets, out)
+		out.WriteString("    movzx rcx, byte [rax]\n")
+		out.WriteString("    call _cupid_print_bool\n")
+	case hir.TypeF32:
+		b.loadOperandToReg(arg, "rax", offsets, out)
+		out.WriteString("    movss xmm0, dword [rax]\n")
+		out.WriteString("    cvtss2sd xmm0, xmm0\n")
+		out.WriteString("    call _cupid_print_f64\n")
+	case hir.TypeF64:
+		b.loadOperandToReg(arg, "rax", offsets, out)
+		out.WriteString("    movsd xmm0, qword [rax]\n")
+		out.WriteString("    call _cupid_print_f64\n")
+	case hir.TypeI8:
+		b.loadOperandToReg(arg, "rax", offsets, out)
+		out.WriteString("    movsx rcx, byte [rax]\n")
+		out.WriteString("    call _cupid_print_i64\n")
+	case hir.TypeU8:
+		b.loadOperandToReg(arg, "rax", offsets, out)
+		out.WriteString("    movzx rcx, byte [rax]\n")
+		out.WriteString("    call _cupid_print_i64\n")
+	case hir.TypeI16:
+		b.loadOperandToReg(arg, "rax", offsets, out)
+		out.WriteString("    movsx rcx, word [rax]\n")
+		out.WriteString("    call _cupid_print_i64\n")
+	case hir.TypeU16:
+		b.loadOperandToReg(arg, "rax", offsets, out)
+		out.WriteString("    movzx rcx, word [rax]\n")
+		out.WriteString("    call _cupid_print_i64\n")
+	case hir.TypeI32:
+		b.loadOperandToReg(arg, "rax", offsets, out)
+		out.WriteString("    movsxd rcx, dword [rax]\n")
+		out.WriteString("    call _cupid_print_i64\n")
+	case hir.TypeU32:
+		b.loadOperandToReg(arg, "rax", offsets, out)
+		out.WriteString("    mov ecx, dword [rax]\n")
+		out.WriteString("    call _cupid_print_i64\n")
+	default:
+		if _, ok := b.prog.Structs[elemType.Name]; ok {
+			b.generatePrintStruct(arg, offsets, out)
+		} else {
+			b.loadOperandToReg(arg, "rax", offsets, out)
+			out.WriteString("    mov rcx, [rax]\n")
+			out.WriteString("    call _cupid_print_i64\n")
+		}
+	}
+}
+
 func (b *Backend) generatePrintStruct(arg mir.Operand, offsets map[int]int, out *bytes.Buffer) {
 	stType := arg.Type
 	isPointer := false
-	if stType != nil && stType.Kind == hir.TypePointer && stType.ElemType != nil {
-		stType = stType.ElemType
+	if stType != nil && stType.Kind == hir.TypePointer {
+		if stType.ElemType != nil {
+			stType = stType.ElemType
+		}
 		isPointer = true
 	}
 
 	stName := "Struct"
 	if stType != nil && stType.Name != "" {
 		stName = stType.Name
+	} else if arg.Type != nil && arg.Type.Name != "" {
+		stName = arg.Type.Name
+	} else if arg.Type != nil && arg.Type.ElemType != nil && arg.Type.ElemType.Name != "" {
+		stName = arg.Type.ElemType.Name
 	}
 
 	label := b.getStringLabel(stName)
@@ -1204,8 +1297,8 @@ func (b *Backend) generatePrintStruct(arg mir.Operand, offsets map[int]int, out 
 		out.WriteString("    call _cupid_print_str\n")
 
 		if isPointer {
-			out.WriteString(fmt.Sprintf("    mov rdi, [rbp - %d]\n", baseOffset))
-			addr := fmt.Sprintf("[rdi + %d]", f.Offset)
+			out.WriteString(fmt.Sprintf("    mov rax, [rbp - %d]\n", baseOffset))
+			addr := fmt.Sprintf("[rax + %d]", f.Offset)
 			b.generatePrintFieldAt(addr, f.Type, offsets, out)
 		} else {
 			addr := fmt.Sprintf("[rbp - %d + %d]", baseOffset, f.Offset)
@@ -1245,8 +1338,8 @@ func (b *Backend) generatePrintTuple(arg mir.Operand, offsets map[int]int, out *
 		}
 
 		if isPointer {
-			out.WriteString(fmt.Sprintf("    mov rdi, [rbp - %d]\n", baseOffset))
-			addr := fmt.Sprintf("[rdi + %d]", f.Offset)
+			out.WriteString(fmt.Sprintf("    mov rax, [rbp - %d]\n", baseOffset))
+			addr := fmt.Sprintf("[rax + %d]", f.Offset)
 			b.generatePrintFieldAt(addr, f.Type, offsets, out)
 		} else {
 			addr := fmt.Sprintf("[rbp - %d + %d]", baseOffset, f.Offset)

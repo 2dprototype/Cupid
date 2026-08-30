@@ -494,6 +494,10 @@ func (l *Lexer) NextToken() Token {
 		tok.Type = STRING
 		tok.Literal = l.readString()
 		return tok
+	case '`':
+		tok.Type = STRING
+		tok.Literal = l.readRawString()
+		return tok
 	case '\'':
 		if l.peekChar() == '\\' {
 			// Escaped char literal e.g. '\n', '\'', '\\'
@@ -705,6 +709,23 @@ func (l *Lexer) readString() string {
 	val := string(l.input[startPos:l.pos])
 	if l.ch == '"' {
 		l.readChar() // consume closing quote
+	}
+	return val
+}
+
+func (l *Lexer) readRawString() string {
+	l.readChar() // consume initial backtick '`'
+	startPos := l.pos
+	for l.ch != '`' && l.ch != 0 {
+		if l.ch == '\n' {
+			l.line++
+			l.col = 0
+		}
+		l.readChar()
+	}
+	val := string(l.input[startPos:l.pos])
+	if l.ch == '`' {
+		l.readChar() // consume closing backtick
 	}
 	return val
 }

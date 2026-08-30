@@ -825,6 +825,21 @@ func (l *Lowerer) lowerExpr(expr ast.Expr, mod *modules.Module) HIRExpr {
 			Value: e.Value,
 		}
 	case *ast.IdentExpr:
+		if hirType == nil {
+			if decl, ok := l.tc.Resolutions()[e]; ok {
+				if ls, ok := decl.(*ast.LetStmt); ok && ls.Type != nil {
+					hirType = l.convertType(ls.Type)
+				} else if p, ok := decl.(*ast.Param); ok && p.Type != nil {
+					hirType = l.convertType(p.Type)
+				}
+			} else if decl, ok := l.resolver.Resolutions[e]; ok {
+				if ls, ok := decl.(*ast.LetStmt); ok && ls.Type != nil {
+					hirType = l.convertType(ls.Type)
+				} else if p, ok := decl.(*ast.Param); ok && p.Type != nil {
+					hirType = l.convertType(p.Type)
+				}
+			}
+		}
 		return &HIRVar{
 			Name: e.Name,
 			Typ:  hirType,
@@ -1030,8 +1045,8 @@ func (l *Lowerer) lowerExpr(expr ast.Expr, mod *modules.Module) HIRExpr {
 		}
 	case *ast.RefExpr:
 		target := l.lowerExpr(e.Target, mod)
-		var refType *HIRType
-		if target.Type() != nil {
+		refType := hirType
+		if refType == nil && target != nil && target.Type() != nil {
 			refType = &HIRType{
 				Kind:     TypePointer,
 				ElemType: target.Type(),
@@ -1045,11 +1060,9 @@ func (l *Lowerer) lowerExpr(expr ast.Expr, mod *modules.Module) HIRExpr {
 		}
 	case *ast.DerefExpr:
 		target := l.lowerExpr(e.Target, mod)
-		var elemType *HIRType
-		if target.Type() != nil && target.Type().ElemType != nil {
+		elemType := hirType
+		if elemType == nil && target != nil && target.Type() != nil && target.Type().ElemType != nil {
 			elemType = target.Type().ElemType
-		} else if hirType != nil {
-			elemType = hirType   // fall back to the type-checker's cached result instead of nil
 		}
 		return &HIRDerefExpr{Target: target, Typ: elemType}
 	case *ast.IndexExpr:
