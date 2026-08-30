@@ -646,7 +646,7 @@ func (tc *TypeChecker) typeCheckIdentExpr(ie *ast.IdentExpr, mod *modules.Module
 	if ie.Name == "_" {
 		return &ast.PrimitiveType{Position: ie.Position, Name: "void"}
 	}
-	if ie.Name == "print" || ie.Name == "println" || ie.Name == "len" || ie.Name == "sizeof" || ie.Name == "alignof" || ie.Name == "channel" || ie.Name == "Sleep" || ie.Name == "sleep" {
+	if ie.Name == "print" || ie.Name == "println" || ie.Name == "len" || ie.Name == "sizeof" || ie.Name == "alignof" || ie.Name == "channel" {
 		return &ast.PrimitiveType{Position: ie.Position, Name: "fn"}
 	}
 
@@ -908,11 +908,6 @@ func (tc *TypeChecker) typeCheckCallExpr(ce *ast.CallExpr, mod *modules.Module) 
 				valType = ce.Generics[0]
 			}
 			return &ast.ChannelType{Position: ce.Position, Value: valType}
-		case "Sleep", "sleep":
-			for _, arg := range ce.Args {
-				tc.TypeCheckExpr(arg, mod)
-			}
-			return &ast.PrimitiveType{Position: ce.Position, Name: "void"}
 		}
 	}
 

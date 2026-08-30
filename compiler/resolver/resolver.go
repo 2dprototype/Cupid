@@ -486,7 +486,7 @@ func (r *Resolver) bindPatternVariables(pat ast.Expr, declNode ast.Node, isMut b
 func (r *Resolver) resolveIdentExpr(ie *ast.IdentExpr, mod *modules.Module, scope *Scope) {
 	// 0. Built-in functions and literals
 	switch ie.Name {
-	case "print", "println", "len", "sizeof", "alignof", "true", "false", "_", "channel", "Sleep", "sleep":
+	case "print", "println", "len", "sizeof", "alignof", "true", "false", "_", "channel":
 		return
 	}
 

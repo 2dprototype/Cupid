@@ -44,7 +44,8 @@ fn main() {
         fs.write_str(&f, "Hello from Cupid native stdlib/fs!\nSecond line of Cupid text.\n")
         fs.close(&mut f)
         println("File written and closed.")
-    } else {
+    } 
+    else {
         println("Could not create file.")
     }
 

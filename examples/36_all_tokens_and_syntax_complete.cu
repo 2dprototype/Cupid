@@ -6,6 +6,7 @@
 
 import "math" as m
 import { abs, max } from "math"
+import "time"
 
 // 1. Constants
 const BASE_OFFSET: i64 = 100
@@ -65,7 +66,7 @@ fn unwrap_demo(x: i64) -> i64 {
 mut comm_ch = channel<i64>()
 
 fn async_worker(task_id: i64) {
-    Sleep(20)
+    time.sleep_ms(20)
     comm_ch.send(task_id + 777)
 }
 

@@ -21,10 +21,12 @@ fn (self: &Item) print_info() {
     self.display()
 }
 
+import "time"
+
 mut comm_ch = channel<string>()
 
 fn background_task() {
-    Sleep(20)
+    time.sleep_ms(20)
     comm_ch.send("Task payload ready")
 }
 

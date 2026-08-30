@@ -1,10 +1,10 @@
-// 26_concurrency_go_channels.cu: Go-style concurrency with go routines and strongly-typed channels
+import "time"
 
 mut ch = channel<i64>()
 
 fn worker(id: i64) {
     println("Worker started concurrently!")
-    Sleep(50)
+    time.sleep_ms(50)
     ch.send(42)
 }
 

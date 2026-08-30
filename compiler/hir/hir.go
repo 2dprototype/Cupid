@@ -869,17 +869,6 @@ func (l *Lowerer) lowerExpr(expr ast.Expr, mod *modules.Module) HIRExpr {
 					Typ: &HIRType{Kind: TypePointer, Name: "channel"},
 				}
 			}
-			if ident.Name == "Sleep" || ident.Name == "sleep" {
-				var arg HIRExpr = &HIRLiteral{Typ: &HIRType{Kind: TypeI64, Name: "i64"}, Value: "0"}
-				if len(e.Args) > 0 {
-					arg = l.lowerExpr(e.Args[0], mod)
-				}
-				return &HIRCallExpr{
-					FuncName: "_cupid_sleep",
-					Args:     []HIRExpr{arg},
-					Typ:      &HIRType{Kind: TypeVoid, Name: "void"},
-				}
-			}
 		}
 
 		funcName := ""

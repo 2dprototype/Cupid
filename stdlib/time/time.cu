@@ -3,26 +3,22 @@
 // Returns the number of milliseconds that have elapsed since the system was started
 export fn now_ticks() -> i64 {
     mut ticks: i64 = 0
-    unsafe {
-        asm {
-            sub rsp, 32
-            call [GetTickCount64]
-            add rsp, 32
-            mov [rbp - 8], rax
-        }
+    asm {
+        sub rsp, 32
+        call [GetTickCount64]
+        add rsp, 32
+        mov [rbp - 8], rax
     }
     return ticks
 }
 
 // Suspends the execution of the current thread for the specified milliseconds
 export fn sleep_ms(ms: i64) {
-    unsafe {
-        asm {
-            mov rcx, [rbp - 8]   ; ms
-            sub rsp, 32
-            call [Sleep]
-            add rsp, 32
-        }
+    asm {
+        mov rcx, [rbp - 8]   ; ms
+        sub rsp, 32
+        call [Sleep]
+        add rsp, 32
     }
 }
 
