@@ -1266,6 +1266,7 @@ const (
 	SHIFT      // << >>
 	SUM        // + -
 	PRODUCT    // * / %
+	CAST       // as
 	PREFIX     // -x or !x or &x or *x
 	CALL       // fn() or obj.method() or arr[index] or expr?
 )
@@ -1300,6 +1301,7 @@ var precedences = map[lexer.TokenType]int{
 	lexer.MUL:        PRODUCT,
 	lexer.DIV:        PRODUCT,
 	lexer.MOD:        PRODUCT,
+	lexer.AS:         CAST,
 	lexer.LPAREN:     CALL,
 	lexer.LBRACKET:   CALL,
 	lexer.DOT:        CALL,
@@ -1404,6 +1406,8 @@ func (p *Parser) parseInfixFn(t lexer.TokenType) infixParseFn {
 		return p.parseSelectorExpr
 	case lexer.QUESTION:
 		return p.parseQuestionExpr
+	case lexer.AS:
+		return p.parseCastExpr
 	default:
 		return nil
 	}
@@ -1631,6 +1635,17 @@ func (p *Parser) parseSelectorExpr(left ast.Expr) ast.Expr {
 func (p *Parser) parseQuestionExpr(left ast.Expr) ast.Expr {
 	pos := ast.Position{File: p.curToken.File, Line: p.curToken.Line, Col: p.curToken.Col}
 	return &ast.QuestionExpr{Position: pos, Target: left}
+}
+
+func (p *Parser) parseCastExpr(left ast.Expr) ast.Expr {
+	pos := ast.Position{File: p.curToken.File, Line: p.curToken.Line, Col: p.curToken.Col}
+	p.nextToken() // curToken is the destination type start
+	targetType := p.parseType()
+	return &ast.TypeCastExpr{
+		Position:   pos,
+		TargetType: targetType,
+		Value:      left,
+	}
 }
 
 func (p *Parser) parseMatchExpr() ast.Expr {

@@ -67,7 +67,7 @@ func (bc *BorrowChecker) isCopyType(t ast.Type) bool {
 	switch pt := t.(type) {
 	case *ast.PrimitiveType:
 		switch pt.Name {
-		case "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "f32", "f64", "bool", "char", "void", "int", "uint", "usize", "isize":
+		case "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "f32", "f64", "bool", "char", "void", "int", "uint", "usize", "isize", "string":
 			return true
 		default:
 			return false
@@ -416,8 +416,12 @@ func (bc *BorrowChecker) checkAssignTarget(target ast.Expr, env *borrowEnv, mod 
 			return
 		}
 		if param, ok := decl.(*ast.Param); ok && !param.Mutable {
-			bc.reportError(ident.Pos(), fmt.Sprintf("cannot assign to immutable parameter %q (declare with 'mut' to make it mutable)", param.Name), "E201", len(param.Name))
-			return
+			if ptr, ok := param.Type.(*ast.PointerType); ok && ptr.Mutable {
+				param.Mutable = true
+			} else {
+				bc.reportError(ident.Pos(), fmt.Sprintf("cannot assign to immutable parameter %q (declare with 'mut' to make it mutable)", param.Name), "E201", len(param.Name))
+				return
+			}
 		}
 		if _, ok := decl.(*ast.GlobalConstDecl); ok {
 			bc.reportError(ident.Pos(), fmt.Sprintf("cannot assign to constant %q", ident.Name), "E201", len(ident.Name))

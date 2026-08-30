@@ -716,6 +716,17 @@ func (ue *UnaryExpr) String() string {
 }
 func (ue *UnaryExpr) exprNode() {}
 
+type CastExpr struct {
+	Position Position
+	Expr     Expr
+	Type     Type
+}
+func (ce *CastExpr) Pos() Position { return ce.Position }
+func (ce *CastExpr) String() string {
+	return fmt.Sprintf("(%s as %s)", ce.Expr.String(), ce.Type.String())
+}
+func (ce *CastExpr) exprNode() {}
+
 type CallExpr struct {
 	Position  Position
 	Function  Expr // IdentExpr or SelectorExpr

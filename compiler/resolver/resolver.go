@@ -189,6 +189,9 @@ func (r *Resolver) resolveFuncDecl(fd *ast.FuncDecl, mod *modules.Module, parent
 	for i := range fd.Params {
 		p := &fd.Params[i]
 		r.resolveType(p.Type, mod, funcScope)
+		if ptr, ok := p.Type.(*ast.PointerType); ok && ptr.Mutable {
+			p.Mutable = true
+		}
 		sym := &Symbol{
 			Name:     p.Name,
 			Kind:     SymVar,
