@@ -443,7 +443,9 @@ func (bc *BorrowChecker) checkAssignTarget(target ast.Expr, env *borrowEnv, mod 
 
 func isAssignmentOp(op lexer.TokenType) bool {
 	return op == lexer.ASSIGN || op == lexer.ADD_ASSIGN || op == lexer.SUB_ASSIGN ||
-		op == lexer.MUL_ASSIGN || op == lexer.DIV_ASSIGN || op == lexer.MOD_ASSIGN
+		op == lexer.MUL_ASSIGN || op == lexer.DIV_ASSIGN || op == lexer.MOD_ASSIGN ||
+		op == lexer.AND_ASSIGN || op == lexer.OR_ASSIGN || op == lexer.XOR_ASSIGN ||
+		op == lexer.SHL_ASSIGN || op == lexer.SHR_ASSIGN
 }
 
 func (bc *BorrowChecker) addBorrow(varName string, borrowedBy string, kind BorrowKind, pos ast.Position, env *borrowEnv) {

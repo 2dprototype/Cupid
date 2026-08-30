@@ -247,7 +247,7 @@ func (p *Parser) parseFuncDecl(exported bool) *ast.FuncDecl {
 		p.nextToken() // consume '<'
 		p.nextToken()
 		for !p.curTokenIs(lexer.GT) && !p.curTokenIs(lexer.EOF) {
-			if p.curTokenIs(lexer.CHAR) { // wait, 'a is represented as 'a which the lexer reads as CHAR if single quote
+			if p.curTokenIs(lexer.LIFETIME) || p.curTokenIs(lexer.CHAR) {
 				lifetimes = append(lifetimes, p.curToken.Literal)
 			} else if p.curTokenIs(lexer.IDENT) {
 				gname := p.curToken.Literal
@@ -390,7 +390,7 @@ func (p *Parser) parseStructDecl(exported bool) *ast.StructDecl {
 		p.nextToken() // '<'
 		p.nextToken()
 		for !p.curTokenIs(lexer.GT) && !p.curTokenIs(lexer.EOF) {
-			if p.curTokenIs(lexer.CHAR) {
+			if p.curTokenIs(lexer.LIFETIME) || p.curTokenIs(lexer.CHAR) {
 				lifetimes = append(lifetimes, p.curToken.Literal)
 			} else if p.curTokenIs(lexer.IDENT) {
 				gname := p.curToken.Literal
@@ -499,7 +499,7 @@ func (p *Parser) parseImplDecl() *ast.ImplDecl {
 		p.nextToken()
 		p.nextToken()
 		for !p.curTokenIs(lexer.GT) && !p.curTokenIs(lexer.EOF) {
-			if p.curTokenIs(lexer.CHAR) {
+			if p.curTokenIs(lexer.LIFETIME) || p.curTokenIs(lexer.CHAR) {
 				lifetimes = append(lifetimes, p.curToken.Literal)
 			} else if p.curTokenIs(lexer.IDENT) {
 				gname := p.curToken.Literal
@@ -592,7 +592,7 @@ func (p *Parser) parseTraitDecl(exported bool) *ast.TraitDecl {
 		p.nextToken() // consume '<'
 		p.nextToken()
 		for !p.curTokenIs(lexer.GT) && !p.curTokenIs(lexer.EOF) {
-			if p.curTokenIs(lexer.CHAR) {
+			if p.curTokenIs(lexer.LIFETIME) || p.curTokenIs(lexer.CHAR) {
 				lifetimes = append(lifetimes, p.curToken.Literal)
 			} else if p.curTokenIs(lexer.IDENT) {
 				gname := p.curToken.Literal
@@ -769,8 +769,13 @@ func (p *Parser) parseType() ast.Type {
 		return &ast.TupleType{Position: pos, Elements: elements}
 	}
 
-	// Pointer types: &T or &mut T
+	// Pointer types: &T, &mut T, &'a T, &'a mut T
 	if p.curTokenIs(lexer.BITAND) {
+		lifetime := ""
+		if p.peekTokenIs(lexer.LIFETIME) || p.peekTokenIs(lexer.CHAR) {
+			p.nextToken()
+			lifetime = p.curToken.Literal
+		}
 		mutable := false
 		if p.peekTokenIs(lexer.MUT) {
 			p.nextToken() // consume 'mut'
@@ -778,7 +783,7 @@ func (p *Parser) parseType() ast.Type {
 		}
 		p.nextToken()
 		toType := p.parseType()
-		return &ast.PointerType{Position: pos, To: toType, Mutable: mutable}
+		return &ast.PointerType{Position: pos, To: toType, Mutable: mutable, Lifetime: lifetime}
 	}
 
 	// Array and slice types: [10]T or []T
@@ -806,7 +811,7 @@ func (p *Parser) parseType() ast.Type {
 	}
 
 	// dyn Trait
-	if p.curTokenIs(lexer.IDENT) && p.curToken.Literal == "dyn" {
+	if p.curTokenIs(lexer.DYN) || (p.curTokenIs(lexer.IDENT) && p.curToken.Literal == "dyn") {
 		p.nextToken()
 		return &ast.DynTraitType{Position: pos, Trait: p.curToken.Literal}
 	}
@@ -819,7 +824,7 @@ func (p *Parser) parseType() ast.Type {
 		var lifetimes []string
 		var params []ast.Type
 		for !p.curTokenIs(lexer.GT) && !p.curTokenIs(lexer.EOF) {
-			if p.curTokenIs(lexer.CHAR) {
+			if p.curTokenIs(lexer.LIFETIME) || p.curTokenIs(lexer.CHAR) {
 				lifetimes = append(lifetimes, p.curToken.Literal)
 			} else {
 				params = append(params, p.parseType())
@@ -1083,7 +1088,7 @@ func (p *Parser) parseSelectStmt() *ast.SelectStmt {
 
 	for !p.peekTokenIs(lexer.RBRACE) && !p.peekTokenIs(lexer.EOF) {
 		p.nextToken()
-		if p.curTokenIs(lexer.IDENT) && p.curToken.Literal == "case" {
+		if p.curTokenIs(lexer.CASE) || (p.curTokenIs(lexer.IDENT) && p.curToken.Literal == "case") {
 			casePos := ast.Position{File: p.curToken.File, Line: p.curToken.Line, Col: p.curToken.Col}
 			p.nextToken()
 			var varName string
@@ -1101,7 +1106,7 @@ func (p *Parser) parseSelectStmt() *ast.SelectStmt {
 			// Parse statements until next case, default, or }
 			stmts := []ast.Stmt{}
 			for !p.peekTokenIs(lexer.RBRACE) && !p.peekTokenIs(lexer.EOF) {
-				if p.peekTokenIs(lexer.IDENT) && (p.peekToken.Literal == "case" || p.peekToken.Literal == "default") {
+				if p.peekTokenIs(lexer.CASE) || p.peekTokenIs(lexer.DEFAULT) || (p.peekTokenIs(lexer.IDENT) && (p.peekToken.Literal == "case" || p.peekToken.Literal == "default")) {
 					break
 				}
 				p.nextToken()
@@ -1112,13 +1117,13 @@ func (p *Parser) parseSelectStmt() *ast.SelectStmt {
 			}
 			body := &ast.BlockStmt{Position: casePos, Stmts: stmts}
 			cases = append(cases, ast.SelectCase{VarName: varName, ChannelOp: channelOp, Body: body})
-		} else if p.curTokenIs(lexer.IDENT) && p.curToken.Literal == "default" {
+		} else if p.curTokenIs(lexer.DEFAULT) || (p.curTokenIs(lexer.IDENT) && p.curToken.Literal == "default") {
 			defaultPos := ast.Position{File: p.curToken.File, Line: p.curToken.Line, Col: p.curToken.Col}
 			p.expectPeek(lexer.COLON)
 			
 			stmts := []ast.Stmt{}
 			for !p.peekTokenIs(lexer.RBRACE) && !p.peekTokenIs(lexer.EOF) {
-				if p.peekTokenIs(lexer.IDENT) && (p.peekToken.Literal == "case" || p.peekToken.Literal == "default") {
+				if p.peekTokenIs(lexer.CASE) || p.peekTokenIs(lexer.DEFAULT) || (p.peekTokenIs(lexer.IDENT) && (p.peekToken.Literal == "case" || p.peekToken.Literal == "default")) {
 					break
 				}
 				p.nextToken()
@@ -1199,7 +1204,7 @@ func (p *Parser) parseForStmt() *ast.ForStmt {
 	oldNoStructInit := p.noStructInit
 	p.noStructInit = true
 
-	if p.curTokenIs(lexer.IDENT) && p.peekTokenIs(lexer.IDENT) && p.peekToken.Literal == "in" {
+	if p.curTokenIs(lexer.IDENT) && (p.peekTokenIs(lexer.IN) || (p.peekTokenIs(lexer.IDENT) && p.peekToken.Literal == "in")) {
 		varName = p.curToken.Literal
 		p.nextToken() // consume var
 		p.nextToken() // consume 'in'
@@ -1272,6 +1277,11 @@ var precedences = map[lexer.TokenType]int{
 	lexer.MUL_ASSIGN: ASSIGNMENT,
 	lexer.DIV_ASSIGN: ASSIGNMENT,
 	lexer.MOD_ASSIGN: ASSIGNMENT,
+	lexer.AND_ASSIGN: ASSIGNMENT,
+	lexer.OR_ASSIGN:  ASSIGNMENT,
+	lexer.XOR_ASSIGN: ASSIGNMENT,
+	lexer.SHL_ASSIGN: ASSIGNMENT,
+	lexer.SHR_ASSIGN: ASSIGNMENT,
 	lexer.OR:         OR,
 	lexer.AND:        AND,
 	lexer.BITOR:      BIT_OR,
@@ -1355,7 +1365,7 @@ func (p *Parser) parsePrefixFn(t lexer.TokenType) prefixParseFn {
 		return func() ast.Expr {
 			return &ast.IdentExpr{Position: ast.Position{File: p.curToken.File, Line: p.curToken.Line, Col: p.curToken.Col}, Name: "channel"}
 		}
-	case lexer.INT, lexer.FLOAT, lexer.STRING, lexer.CHAR:
+	case lexer.INT, lexer.FLOAT, lexer.STRING, lexer.CHAR, lexer.TRUE, lexer.FALSE:
 		return p.parseLiteralExpr
 	case lexer.SUB, lexer.NOT, lexer.MUL:
 		return p.parsePrefixExpr
@@ -1382,7 +1392,9 @@ func (p *Parser) parseInfixFn(t lexer.TokenType) infixParseFn {
 		lexer.AND, lexer.OR, lexer.BITAND, lexer.BITOR, lexer.BITXOR,
 		lexer.SHL, lexer.SHR,
 		lexer.ASSIGN, lexer.ADD_ASSIGN, lexer.SUB_ASSIGN,
-		lexer.MUL_ASSIGN, lexer.DIV_ASSIGN, lexer.MOD_ASSIGN:
+		lexer.MUL_ASSIGN, lexer.DIV_ASSIGN, lexer.MOD_ASSIGN,
+		lexer.AND_ASSIGN, lexer.OR_ASSIGN, lexer.XOR_ASSIGN,
+		lexer.SHL_ASSIGN, lexer.SHR_ASSIGN:
 		return p.parseBinaryExpr
 	case lexer.LPAREN:
 		return p.parseCallExpr
@@ -1705,10 +1717,16 @@ func (p *Parser) parseGenericCallOrInit(left ast.Expr) ast.Expr {
 	pos := ast.Position{File: p.curToken.File, Line: p.curToken.Line, Col: p.curToken.Col}
 	// curToken is '<'
 	
+	lifetimes := []string{}
 	generics := []ast.Type{}
 	for !p.peekTokenIs(lexer.GT) && !p.peekTokenIs(lexer.EOF) {
-		p.nextToken()
-		generics = append(generics, p.parseType())
+		if p.peekTokenIs(lexer.LIFETIME) || p.peekTokenIs(lexer.CHAR) {
+			p.nextToken()
+			lifetimes = append(lifetimes, p.curToken.Literal)
+		} else {
+			p.nextToken()
+			generics = append(generics, p.parseType())
+		}
 		if p.peekTokenIs(lexer.COMMA) {
 			p.nextToken()
 		}
@@ -1734,6 +1752,7 @@ func (p *Parser) parseGenericCallOrInit(left ast.Expr) ast.Expr {
 		return &ast.CallExpr{
 			Position:  pos,
 			Function:  left,
+			Lifetimes: lifetimes,
 			Generics:  generics,
 			Args:      args,
 		}
@@ -1771,9 +1790,10 @@ func (p *Parser) parseGenericCallOrInit(left ast.Expr) ast.Expr {
 		return &ast.StructInitExpr{
 			Position: pos,
 			Struct: &ast.GenericType{
-				Position: pos,
-				BaseName: baseName,
-				Params:   generics,
+				Position:  pos,
+				BaseName:  baseName,
+				Params:    generics,
+				Lifetimes: lifetimes,
 			},
 			Fields: fields,
 		}

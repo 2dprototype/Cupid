@@ -684,6 +684,16 @@ func (tc *TypeChecker) typeCheckIdentExpr(ie *ast.IdentExpr, mod *modules.Module
 	return nil
 }
 
+func isAssignmentOp(op lexer.TokenType) bool {
+	switch op {
+	case lexer.ASSIGN, lexer.ADD_ASSIGN, lexer.SUB_ASSIGN, lexer.MUL_ASSIGN, lexer.DIV_ASSIGN, lexer.MOD_ASSIGN,
+		lexer.AND_ASSIGN, lexer.OR_ASSIGN, lexer.XOR_ASSIGN, lexer.SHL_ASSIGN, lexer.SHR_ASSIGN:
+		return true
+	default:
+		return false
+	}
+}
+
 func (tc *TypeChecker) typeCheckLiteralExpr(le *ast.LiteralExpr) ast.Type {
 	switch le.Type {
 	case lexer.INT:
@@ -694,6 +704,8 @@ func (tc *TypeChecker) typeCheckLiteralExpr(le *ast.LiteralExpr) ast.Type {
 		return &ast.PrimitiveType{Position: le.Position, Name: "string"}
 	case lexer.CHAR:
 		return &ast.PrimitiveType{Position: le.Position, Name: "char"}
+	case lexer.TRUE, lexer.FALSE:
+		return &ast.PrimitiveType{Position: le.Position, Name: "bool"}
 	}
 	return nil
 }
@@ -709,7 +721,7 @@ func (tc *TypeChecker) typeCheckBinaryExpr(be *ast.BinaryExpr, mod *modules.Modu
 	if !tc.TypesEqual(leftType, rightType) {
 		if tc.checkAssignable(leftType, be.Right, rightType) {
 			rightType = leftType
-		} else if be.Op != lexer.ASSIGN && tc.checkAssignable(rightType, be.Left, leftType) {
+		} else if !isAssignmentOp(be.Op) && tc.checkAssignable(rightType, be.Left, leftType) {
 			leftType = rightType
 		} else {
 			tc.reportError(be.Pos(), fmt.Sprintf("type mismatch in binary expression: left has %q, right has %q", leftType.String(), rightType.String()), "E401", len(be.Op.String()))

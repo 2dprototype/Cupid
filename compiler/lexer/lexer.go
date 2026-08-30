@@ -18,6 +18,7 @@ const (
 	FLOAT
 	STRING
 	CHAR
+	LIFETIME
 
 	// Keywords
 	FN
@@ -30,6 +31,12 @@ const (
 	GO
 	CHANNEL
 	SELECT
+	CASE
+	DEFAULT
+	IN
+	DYN
+	TRUE
+	FALSE
 	UNSAFE
 	ASM
 	MATCH
@@ -45,42 +52,46 @@ const (
 	BREAK
 	CONTINUE
 
-
 	// Operators & Symbols
-	ADD      // +
-	SUB      // -
-	MUL      // *
-	DIV      // /
-	MOD      // %
-	EQ       // ==
-	NEQ      // !=
-	LT       // <
-	LTE      // <=
-	GT       // >
-	GTE      // >=
-	ASSIGN   // =
-	ADD_ASSIGN // +=
-	SUB_ASSIGN // -=
-	MUL_ASSIGN // *=
-	DIV_ASSIGN // /=
-	MOD_ASSIGN // %=
-	AND      // &&
-	OR       // ||
-	NOT      // !
-	BITAND   // &
-	BITOR    // |
-	BITXOR   // ^
-	SHL      // <<
-	SHR      // >>
-	ARROW    // ->
-	FAT_ARROW // =>
-	QUESTION // ?
-	DOT      // .
-	DOTDOT   // ..
-	COLON    // :
+	ADD          // +
+	SUB          // -
+	MUL          // *
+	DIV          // /
+	MOD          // %
+	EQ           // ==
+	NEQ          // !=
+	LT           // <
+	LTE          // <=
+	GT           // >
+	GTE          // >=
+	ASSIGN       // =
+	ADD_ASSIGN   // +=
+	SUB_ASSIGN   // -=
+	MUL_ASSIGN   // *=
+	DIV_ASSIGN   // /=
+	MOD_ASSIGN   // %=
+	AND_ASSIGN   // &=
+	OR_ASSIGN    // |=
+	XOR_ASSIGN   // ^=
+	SHL_ASSIGN   // <<=
+	SHR_ASSIGN   // >>=
+	AND          // &&
+	OR           // ||
+	NOT          // !
+	BITAND       // &
+	BITOR        // |
+	BITXOR       // ^
+	SHL          // <<
+	SHR          // >>
+	ARROW        // ->
+	FAT_ARROW    // =>
+	QUESTION     // ?
+	DOT          // .
+	DOTDOT       // ..
+	COLON        // :
 	DOUBLE_COLON // ::
-	COMMA    // ,
-	AT       // @
+	COMMA        // ,
+	AT           // @
 
 	// Delimiters
 	LPAREN   // (
@@ -92,78 +103,90 @@ const (
 )
 
 var tokenNames = map[TokenType]string{
-	EOF:      "EOF",
-	ILLEGAL:  "ILLEGAL",
-	IDENT:    "IDENT",
-	INT:      "INT",
-	FLOAT:    "FLOAT",
-	STRING:   "STRING",
-	CHAR:     "CHAR",
-	FN:       "fn",
-	STRUCT:   "struct",
-	IMPL:     "impl",
-	TRAIT:    "trait",
-	LET:      "let",
-	MUT:      "mut",
-	CONST:    "const",
-	GO:       "go",
-	CHANNEL:  "channel",
-	SELECT:   "select",
-	UNSAFE:   "unsafe",
-	ASM:      "asm",
-	MATCH:    "match",
-	IMPORT:   "import",
-	EXPORT:   "export",
-	AS:       "as",
-	FROM:     "from",
-	IF:       "if",
-	ELSE:     "else",
-	FOR:      "for",
-	RETURN:   "return",
-	WHERE:    "where",
-	BREAK:    "break",
-	CONTINUE: "continue",
+	EOF:        "EOF",
+	ILLEGAL:    "ILLEGAL",
+	IDENT:      "IDENT",
+	INT:        "INT",
+	FLOAT:      "FLOAT",
+	STRING:     "STRING",
+	CHAR:       "CHAR",
+	LIFETIME:   "LIFETIME",
+	FN:         "fn",
+	STRUCT:     "struct",
+	IMPL:       "impl",
+	TRAIT:      "trait",
+	LET:        "let",
+	MUT:        "mut",
+	CONST:      "const",
+	GO:         "go",
+	CHANNEL:    "channel",
+	SELECT:     "select",
+	CASE:       "case",
+	DEFAULT:    "default",
+	IN:         "in",
+	DYN:        "dyn",
+	TRUE:       "true",
+	FALSE:      "false",
+	UNSAFE:     "unsafe",
+	ASM:        "asm",
+	MATCH:      "match",
+	IMPORT:     "import",
+	EXPORT:     "export",
+	AS:         "as",
+	FROM:       "from",
+	IF:         "if",
+	ELSE:       "else",
+	FOR:        "for",
+	RETURN:     "return",
+	WHERE:      "where",
+	BREAK:      "break",
+	CONTINUE:   "continue",
 
-	ADD:      "+",
-	SUB:      "-",
-	MUL:      "*",
-	DIV:      "/",
-	MOD:      "%",
-	EQ:       "==",
-	NEQ:      "!=",
-	LT:       "<",
-	LTE:      "<=",
-	GT:       ">",
-	GTE:      ">=",
-	ASSIGN:   "=",
+	ADD:        "+",
+	SUB:        "-",
+	MUL:        "*",
+	DIV:        "/",
+	MOD:        "%",
+	EQ:         "==",
+	NEQ:        "!=",
+	LT:         "<",
+	LTE:        "<=",
+	GT:         ">",
+	GTE:        ">=",
+	ASSIGN:     "=",
 	ADD_ASSIGN: "+=",
 	SUB_ASSIGN: "-=",
 	MUL_ASSIGN: "*=",
 	DIV_ASSIGN: "/=",
 	MOD_ASSIGN: "%=",
-	AND:      "&&",
-	OR:       "||",
-	NOT:      "!",
-	BITAND:   "&",
-	BITOR:    "|",
-	BITXOR:   "^",
-	SHL:      "<<",
-	SHR:      ">>",
-	ARROW:    "->",
-	FAT_ARROW: "=>",
-	QUESTION: "?",
-	DOT:      ".",
-	DOTDOT:   "..",
-	COLON:    ":",
+	AND_ASSIGN: "&=",
+	OR_ASSIGN:  "|=",
+	XOR_ASSIGN: "^=",
+	SHL_ASSIGN: "<<=",
+	SHR_ASSIGN: ">>=",
+	AND:        "&&",
+	OR:         "||",
+	NOT:        "!",
+	BITAND:     "&",
+	BITOR:      "|",
+	BITXOR:     "^",
+	SHL:        "<<",
+	SHR:        ">>",
+	ARROW:      "->",
+	FAT_ARROW:  "=>",
+	QUESTION:   "?",
+	DOT:        ".",
+	DOTDOT:     "..",
+	COLON:      ":",
 	DOUBLE_COLON: "::",
-	COMMA:    ",",
-	AT:       "@",
-	LPAREN:   "(",
-	RPAREN:   ")",
-	LBRACE:   "{",
-	RBRACE:   "}",
-	LBRACKET: "[",
-	RBRACKET: "]",
+	COMMA:      ",",
+	AT:         "@",
+	LPAREN:     "(",
+	RPAREN:     ")",
+	LBRACE:     "{",
+	RBRACE:     "}",
+	LBRACKET:   "[",
+	RBRACKET:   "]",
 }
 
 func (t TokenType) String() string {
@@ -182,26 +205,32 @@ type Token struct {
 }
 
 var keywords = map[string]TokenType{
-	"fn":      FN,
-	"struct":  STRUCT,
-	"impl":    IMPL,
-	"trait":   TRAIT,
-	"let":     LET,
-	"mut":     MUT,
-	"const":   CONST,
-	"go":      GO,
-	"channel": CHANNEL,
-	"select":  SELECT,
-	"unsafe":  UNSAFE,
+	"fn":       FN,
+	"struct":   STRUCT,
+	"impl":     IMPL,
+	"trait":    TRAIT,
+	"let":      LET,
+	"mut":      MUT,
+	"const":    CONST,
+	"go":       GO,
+	"channel":  CHANNEL,
+	"select":   SELECT,
+	"case":     CASE,
+	"default":  DEFAULT,
+	"in":       IN,
+	"dyn":      DYN,
+	"true":     TRUE,
+	"false":    FALSE,
+	"unsafe":   UNSAFE,
 	"asm":      ASM,
 	"match":    MATCH,
-	"import":  IMPORT,
-	"export":  EXPORT,
-	"as":      AS,
-	"from":    FROM,
-	"if":      IF,
-	"else":    ELSE,
-	"for":     FOR,
+	"import":   IMPORT,
+	"export":   EXPORT,
+	"as":       AS,
+	"from":     FROM,
+	"if":       IF,
+	"else":     ELSE,
+	"for":      FOR,
 	"return":   RETURN,
 	"where":    WHERE,
 	"break":    BREAK,
@@ -350,8 +379,14 @@ func (l *Lexer) NextToken() Token {
 			tok.Literal = "<="
 		} else if l.peekChar() == '<' {
 			l.readChar()
-			tok.Type = SHL
-			tok.Literal = "<<"
+			if l.peekChar() == '=' {
+				l.readChar()
+				tok.Type = SHL_ASSIGN
+				tok.Literal = "<<="
+			} else {
+				tok.Type = SHL
+				tok.Literal = "<<"
+			}
 		} else {
 			tok.Type = LT
 			tok.Literal = "<"
@@ -363,14 +398,24 @@ func (l *Lexer) NextToken() Token {
 			tok.Literal = ">="
 		} else if l.peekChar() == '>' {
 			l.readChar()
-			tok.Type = SHR
-			tok.Literal = ">>"
+			if l.peekChar() == '=' {
+				l.readChar()
+				tok.Type = SHR_ASSIGN
+				tok.Literal = ">>="
+			} else {
+				tok.Type = SHR
+				tok.Literal = ">>"
+			}
 		} else {
 			tok.Type = GT
 			tok.Literal = ">"
 		}
 	case '&':
-		if l.peekChar() == '&' {
+		if l.peekChar() == '=' {
+			l.readChar()
+			tok.Type = AND_ASSIGN
+			tok.Literal = "&="
+		} else if l.peekChar() == '&' {
 			l.readChar()
 			tok.Type = AND
 			tok.Literal = "&&"
@@ -379,7 +424,11 @@ func (l *Lexer) NextToken() Token {
 			tok.Literal = "&"
 		}
 	case '|':
-		if l.peekChar() == '|' {
+		if l.peekChar() == '=' {
+			l.readChar()
+			tok.Type = OR_ASSIGN
+			tok.Literal = "|="
+		} else if l.peekChar() == '|' {
 			l.readChar()
 			tok.Type = OR
 			tok.Literal = "||"
@@ -388,8 +437,14 @@ func (l *Lexer) NextToken() Token {
 			tok.Literal = "|"
 		}
 	case '^':
-		tok.Type = BITXOR
-		tok.Literal = "^"
+		if l.peekChar() == '=' {
+			l.readChar()
+			tok.Type = XOR_ASSIGN
+			tok.Literal = "^="
+		} else {
+			tok.Type = BITXOR
+			tok.Literal = "^"
+		}
 	case '?':
 		tok.Type = QUESTION
 		tok.Literal = "?"
@@ -440,9 +495,28 @@ func (l *Lexer) NextToken() Token {
 		tok.Literal = l.readString()
 		return tok
 	case '\'':
-		tok.Type = CHAR
-		tok.Literal = l.readCharLiteral()
-		return tok
+		if l.peekChar() == '\\' {
+			// Escaped char literal e.g. '\n', '\'', '\\'
+			tok.Type = CHAR
+			tok.Literal = l.readCharLiteral()
+			return tok
+		} else if isLetter(l.peekChar()) {
+			// Single char literal like 'a' vs Lifetime like 'a or 'static
+			if l.peekNChar(2) == '\'' {
+				tok.Type = CHAR
+				tok.Literal = l.readCharLiteral()
+				return tok
+			}
+			// Multi-char or unclosed single quote followed by ident -> LIFETIME
+			tok.Type = LIFETIME
+			tok.Literal = l.readLifetime()
+			return tok
+		} else {
+			// Other char literal e.g. ';', ' ', or empty
+			tok.Type = CHAR
+			tok.Literal = l.readCharLiteral()
+			return tok
+		}
 	default:
 		if isLetter(l.ch) {
 			tok.Literal = l.readIdentifier()
@@ -495,19 +569,26 @@ func (l *Lexer) skipWhitespaceAndComments() {
 				l.readChar()
 			}
 		} else if l.ch == '/' && l.peekChar() == '*' {
-			// Multi-line comment
+			// Multi-line comment (supports nested comments)
 			l.readChar() // consume '/'
 			l.readChar() // consume '*'
-			for !(l.ch == '*' && l.peekChar() == '/') && l.ch != 0 {
-				if l.ch == '\n' {
-					l.line++
-					l.col = 0
+			nesting := 1
+			for nesting > 0 && l.ch != 0 {
+				if l.ch == '/' && l.peekChar() == '*' {
+					nesting++
+					l.readChar() // consume '/'
+					l.readChar() // consume '*'
+				} else if l.ch == '*' && l.peekChar() == '/' {
+					nesting--
+					l.readChar() // consume '*'
+					l.readChar() // consume '/'
+				} else {
+					if l.ch == '\n' {
+						l.line++
+						l.col = 0
+					}
+					l.readChar()
 				}
-				l.readChar()
-			}
-			if l.ch != 0 {
-				l.readChar() // consume '*'
-				l.readChar() // consume '/'
 			}
 		} else {
 			break
@@ -520,7 +601,15 @@ func (l *Lexer) readIdentifier() string {
 	for isLetter(l.ch) || isDigit(l.ch) {
 		l.readChar()
 	}
-	// slice runes to string
+	return string(l.input[startPos:l.pos])
+}
+
+func (l *Lexer) readLifetime() string {
+	l.readChar() // consume initial single quote '\''
+	startPos := l.pos
+	for isLetter(l.ch) || isDigit(l.ch) {
+		l.readChar()
+	}
 	return string(l.input[startPos:l.pos])
 }
 
@@ -597,9 +686,21 @@ func (l *Lexer) readString() string {
 	startPos := l.pos
 	for l.ch != '"' && l.ch != 0 {
 		if l.ch == '\\' {
-			l.readChar() // consume escape prefix
+			l.readChar() // consume escape prefix '\'
+			if l.ch != 0 {
+				if l.ch == '\n' {
+					l.line++
+					l.col = 0
+				}
+				l.readChar() // consume escaped char
+			}
+		} else {
+			if l.ch == '\n' {
+				l.line++
+				l.col = 0
+			}
+			l.readChar()
 		}
-		l.readChar()
 	}
 	val := string(l.input[startPos:l.pos])
 	if l.ch == '"' {
@@ -612,9 +713,13 @@ func (l *Lexer) readCharLiteral() string {
 	l.readChar() // consume initial single quote
 	startPos := l.pos
 	if l.ch == '\\' {
-		l.readChar() // consume escape
+		l.readChar() // consume escape prefix '\'
+		if l.ch != 0 {
+			l.readChar() // consume escaped character
+		}
+	} else if l.ch != 0 && l.ch != '\'' {
+		l.readChar() // consume character
 	}
-	l.readChar() // consume character
 	val := string(l.input[startPos:l.pos])
 	if l.ch == '\'' {
 		l.readChar() // consume closing quote

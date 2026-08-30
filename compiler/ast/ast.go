@@ -57,13 +57,18 @@ type PointerType struct {
 	Position Position
 	To       Type
 	Mutable  bool
+	Lifetime string
 }
 func (pt *PointerType) Pos() Position { return pt.Position }
 func (pt *PointerType) String() string {
-	if pt.Mutable {
-		return "&mut " + pt.To.String()
+	lt := ""
+	if pt.Lifetime != "" {
+		lt = "'" + pt.Lifetime + " "
 	}
-	return "&" + pt.To.String()
+	if pt.Mutable {
+		return "&" + lt + "mut " + pt.To.String()
+	}
+	return "&" + lt + pt.To.String()
 }
 func (pt *PointerType) typeNode() {}
 

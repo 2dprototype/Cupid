@@ -1271,12 +1271,13 @@ func (l *Lowerer) literalType(tokenType string, value string) *HIRType {
 		return &HIRType{Kind: TypeString, Name: "string"}
 	case "CHAR":
 		return &HIRType{Kind: TypeChar, Name: "char"}
-	case "true", "false", "bool":
+	case "TRUE", "FALSE", "true", "false", "bool":
 		return &HIRType{Kind: TypeBool, Name: "bool"}
 	}
 	return &HIRType{Kind: TypeI32, Name: "i32"}
 }
 
 func isAssignmentOp(op string) bool {
-	return op == "=" || op == "+=" || op == "-=" || op == "*=" || op == "/=" || op == "%="
+	return op == "=" || op == "+=" || op == "-=" || op == "*=" || op == "/=" || op == "%=" ||
+		op == "&=" || op == "|=" || op == "^=" || op == "<<=" || op == ">>="
 }
