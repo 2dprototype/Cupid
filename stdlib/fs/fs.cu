@@ -13,7 +13,7 @@ export fn open_read(path: string) -> File {
         ; FILE_SHARE_READ = 1
         ; OPEN_EXISTING = 3
         ; FILE_ATTRIBUTE_NORMAL = 0x80
-        mov rcx, [rbp - 16]      ; path string pointer (first 8 bytes of 16-byte string)
+        mov rcx, [rbp - 16]      ; path string pointer
         mov rdx, 80000000h       ; dwDesiredAccess (GENERIC_READ)
         mov r8, 1                ; dwShareMode (FILE_SHARE_READ)
         mov r9, 0                ; lpSecurityAttributes (NULL)
@@ -46,7 +46,7 @@ export fn create(path: string) -> File {
         ; GENERIC_WRITE = 0x40000000
         ; CREATE_ALWAYS = 2
         ; FILE_ATTRIBUTE_NORMAL = 0x80
-        mov rcx, [rbp - 16]      ; path string pointer (first 8 bytes of 16-byte string)
+        mov rcx, [rbp - 16]      ; path string pointer
         mov rdx, 40000000h       ; dwDesiredAccess (GENERIC_WRITE)
         mov r8, 0                ; dwShareMode (0)
         mov r9, 0                ; lpSecurityAttributes (NULL)
@@ -74,41 +74,50 @@ export fn create(path: string) -> File {
 
 // Writes text to an open file
 export fn write_str(f: &File, text: string) -> bool {
-    if !f.is_open || f.handle == 0 {
-        return false
-    }
-
-    let text_len: i64 = len(text)
-    mut bytes_written: i64 = 0
-
+    mut success: i64 = 0
     asm {
         mov rcx, [rbp - 8]       ; &File pointer
-        mov rcx, [rcx]           ; f.handle
-        mov rdx, [rbp - 24]      ; text string pointer
-        mov r8, [rbp - 32]       ; text_len
-        lea r9, [rbp - 40]       ; &bytes_written
-        sub rsp, 48              ; 32 shadow + 8 arg + 8 alignment = 48 (16-byte aligned)
+        mov al, byte [rcx + 8]   ; f.is_open
+        cmp al, 0
+        je .ws_fail
+        mov rcx, [rcx + 0]       ; f.handle
+        cmp rcx, 0
+        je .ws_fail
+
+        mov rdx, [rbp - 24]      ; text string data pointer
+        mov r8, [rbp - 16]       ; text string length
+        sub rsp, 64              ; 32 shadow + 8 arg + 24 local/align = 64 (16-byte aligned)
+        lea r9, [rsp + 40]       ; temporary slot for lpNumberOfBytesWritten
         mov qword [rsp + 32], 0  ; lpOverlapped (NULL)
         call [WriteFile]
-        add rsp, 48
+        add rsp, 64
+        mov [rbp - 32], rax      ; store result into success
+        jmp .ws_done
+    .ws_fail:
+        mov qword [rbp - 32], 0
+    .ws_done:
     }
 
-    return bytes_written == text_len
+    return success != 0
 }
 
 // Closes an open file
 export fn close(f: &mut File) {
-    if f.is_open && f.handle != 0 {
-        asm {
-            mov rcx, [rbp - 8]   ; &mut File
-            mov rcx, [rcx]       ; f.handle
-            sub rsp, 32          ; shadow space (16-byte aligned)
-            call [CloseHandle]
-            add rsp, 32
-        }
-        f.handle = 0
-        f.is_open = false
+    asm {
+        mov rcx, [rbp - 8]       ; &mut File
+        mov al, byte [rcx + 8]   ; f.is_open
+        cmp al, 0
+        je .close_done
+        mov rcx, [rcx + 0]       ; f.handle
+        cmp rcx, 0
+        je .close_done
+        sub rsp, 32              ; shadow space (16-byte aligned)
+        call [CloseHandle]
+        add rsp, 32
+    .close_done:
     }
+    f.handle = 0
+    f.is_open = false
 }
 
 // Checks whether a file exists
